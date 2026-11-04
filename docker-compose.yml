@@ -1,0 +1,91 @@
+services:
+  # Fast quantitative API and agent debate orchestrator
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backend
+    container_name: quant-scanner-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DATABASE_URL=postgresql://quant_user:quant_password@timescaledb:5432/market_scanner
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATA_PROVIDER=yahoo
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # Celery background worker for scheduled multi-timeframe candle scans
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backend
+    container_name: quant-scanner-worker
+    command: celery -A worker.celery_app worker --loglevel=info -B
+    restart: unless-stopped
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DATABASE_URL=postgresql://quant_user:quant_password@timescaledb:5432/market_scanner
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - backend
+      - redis
+      - timescaledb
+
+  # TimescaleDB / PostgreSQL with pgvector for 30-year market memory and embeddings
+  timescaledb:
+    image: timescale/timescaledb-ha:pg16
+    container_name: quant-scanner-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=quant_user
+      - POSTGRES_PASSWORD=quant_password
+      - POSTGRES_DB=market_scanner
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quant_user -d market_scanner"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis for pub/sub, caching, and Celery task queues
+  redis:
+    image: redis:7-alpine
+    container_name: quant-scanner-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # Interactive Dark Bloomberg / TradingView terminal frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend
+    container_name: quant-scanner-ui
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://backend:8000
+    depends_on:
+      - backend
+
+volumes:
+  timescaledb_data:
+  redis_data:

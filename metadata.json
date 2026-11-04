@@ -1,0 +1,6 @@
+{
+  "name": "Multi-Agent Market Scanner",
+  "description": "Production-grade quantitative scanner for forex and commodities with a 10-specialist AI agent debate and chief arbiter trade recommendations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

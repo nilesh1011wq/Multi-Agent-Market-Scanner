@@ -1,0 +1,399 @@
+import express from 'express';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { createServer as createViteServer } from 'vite';
+import dotenv from 'dotenv';
+import { marketDataService, WATCHLIST } from './src/data/marketDataService';
+import { buildFeatureSnapshot, buildMultiTimeframeSnapshot } from './src/quant/snapshot';
+import { queryHistoricalAnalogs } from './src/analogs/analogEngine';
+import { getCOTData } from './src/analogs/cotEngine';
+import { HISTORICAL_EVENTS } from './src/analogs/historicalEvents';
+import { KB_COLLECTIONS, getAgentKBDocs } from './src/analogs/kbDocuments';
+import { runQuantTests } from './src/quant/testFeatureEngine';
+import { Timeframe } from './src/types/market';
+
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+async function startServer() {
+  const app = express();
+  const port = process.env.PORT || 3000;
+
+  app.use(express.json());
+
+  // 1. Watchlist and symbol metadata
+  app.get('/api/symbols', (_req, res) => {
+    res.json({ success: true, watchlist: WATCHLIST });
+  });
+
+  // 2. Multi-timeframe candle data
+  app.get('/api/candles', async (req, res) => {
+    try {
+      const symbol = (req.query.symbol as string) || 'EURUSD';
+      const timeframe = (req.query.timeframe as Timeframe) || 'H1';
+      const count = parseInt(req.query.count as string, 10) || 120;
+
+      const candles = await marketDataService.getCandles(symbol, timeframe, count);
+      res.json({ success: true, symbol, timeframe, candles });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 3. Deterministic feature snapshot & 30-year historical analogs
+  app.get('/api/snapshot', async (req, res) => {
+    try {
+      const symbol = (req.query.symbol as string) || 'EURUSD';
+      const timeframe = (req.query.timeframe as Timeframe) || 'H1';
+
+      const candles = await marketDataService.getCandles(symbol, timeframe, 120);
+      const snapshot = buildFeatureSnapshot(symbol, timeframe, candles);
+      const analogs = queryHistoricalAnalogs(snapshot);
+      const cot = getCOTData(symbol);
+
+      res.json({
+        success: true,
+        snapshot,
+        analogs,
+        cot,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 4. Multi-timeframe full snapshot (M15, H1, H4, D1, W1)
+  app.get('/api/mtf-snapshot', async (req, res) => {
+    try {
+      const symbol = (req.query.symbol as string) || 'EURUSD';
+      const timeframes: Timeframe[] = ['M15', 'H1', 'H4', 'D1', 'W1'];
+      const candleMap: Record<Timeframe, any> = {} as any;
+
+      for (const tf of timeframes) {
+        candleMap[tf] = await marketDataService.getCandles(symbol, tf, 100);
+      }
+
+      const mtfSnapshot = buildMultiTimeframeSnapshot(symbol, candleMap);
+      const h1Snapshot = buildFeatureSnapshot(symbol, 'H1', candleMap.H1);
+      const analogs = queryHistoricalAnalogs(h1Snapshot);
+      const cot = getCOTData(symbol);
+
+      res.json({
+        success: true,
+        mtfSnapshot,
+        analogs,
+        cot,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 5. Economic Calendar & Blackout Windows
+  app.get('/api/calendar', async (_req, res) => {
+    try {
+      const calendar = await marketDataService.getEconomicCalendar();
+      res.json({ success: true, calendar });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 6. News & Sentiment feed
+  app.get('/api/news', async (req, res) => {
+    try {
+      const symbol = (req.query.symbol as string) || 'EURUSD';
+      const news = await marketDataService.getNews(symbol);
+      res.json({ success: true, news });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 7. 30-Year Event & Regime Library
+  app.get('/api/historical-events', (_req, res) => {
+    res.json({ success: true, events: HISTORICAL_EVENTS });
+  });
+
+  // 8. Curated Agent Knowledge Base collections
+  app.get('/api/kb-docs', (req, res) => {
+    const agent = req.query.agent as any;
+    if (agent) {
+      res.json({ success: true, docs: getAgentKBDocs(agent) });
+    } else {
+      res.json({ success: true, docs: KB_COLLECTIONS });
+    }
+  });
+
+  // 9. Run automated Quant feature engine test suite
+  app.post('/api/test-quant', (_req, res) => {
+    try {
+      const passed = runQuantTests();
+      res.json({ success: true, passed, timestamp: Date.now() });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 10. Phase 2: Trend & Momentum Agent Single-Timeframe Execution
+  app.post('/api/agent/trend', async (req, res) => {
+    try {
+      const symbol = (req.body.symbol as string) || 'EURUSD';
+      const timeframe = (req.body.timeframe as Timeframe) || 'H1';
+
+      const candles = await marketDataService.getCandles(symbol, timeframe, 120);
+      const snapshot = buildFeatureSnapshot(symbol, timeframe, candles);
+      const analogs = queryHistoricalAnalogs(snapshot);
+
+      const { executeTrendAgent } = await import('./src/agents/trendAgent');
+      const startTime = Date.now();
+      const output = await executeTrendAgent({ snapshot, analogs });
+      const durationMs = Date.now() - startTime;
+
+      res.json({
+        success: true,
+        symbol,
+        timeframe,
+        durationMs,
+        output,
+        snapshot,
+        analogs,
+      });
+    } catch (err: any) {
+      console.error('[API /api/agent/trend] Error:', err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 11. Phase 3: Full 3-Round 10-Agent Debate & Arbiter Synthesis
+  app.post('/api/debate/run', async (req, res) => {
+    try {
+      const symbol = (req.body.symbol as string) || 'EURUSD';
+      const timeframe = (req.body.timeframe as Timeframe) || 'H1';
+
+      const candles = await marketDataService.getCandles(symbol, timeframe, 120);
+      const snapshot = buildFeatureSnapshot(symbol, timeframe, candles);
+      const analogs = queryHistoricalAnalogs(snapshot);
+      const cot = getCOTData(symbol);
+
+      const { runFullDebate } = await import('./src/agents/debateOrchestrator');
+      const { scorecardService } = await import('./src/backtest/scorecards');
+      const agentScorecards = scorecardService.getScorecards(symbol, timeframe);
+
+      const startTime = Date.now();
+      const debateTranscript = await runFullDebate({
+        snapshot,
+        analogs,
+        cot,
+        agentScorecards,
+      });
+      const durationMs = Date.now() - startTime;
+
+      res.json({
+        success: true,
+        durationMs,
+        debate: debateTranscript,
+      });
+    } catch (err: any) {
+      console.error('[API /api/debate/run] Error:', err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 11b. Engine Status & Quota Health
+  app.get('/api/engine/status', async (_req, res) => {
+    try {
+      const { quotaManager } = await import('./src/agents/quotaManager');
+      res.json({
+        success: true,
+        ...quotaManager.getStatus(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 12. Phase 4: Scorecards & Walk-Forward Performance Tracking
+  app.get('/api/scorecards', async (req, res) => {
+    try {
+      const symbol = (req.query.symbol as string) || 'EURUSD';
+      const timeframe = (req.query.timeframe as Timeframe) || 'H1';
+
+      const { scorecardService } = await import('./src/backtest/scorecards');
+      const scorecards = scorecardService.getScorecards(symbol, timeframe);
+      const recommendations = scorecardService.getRecommendations();
+
+      res.json({
+        success: true,
+        symbol,
+        timeframe,
+        scorecards,
+        recommendations,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 13. Phase 4: Run Walk-Forward Backtest
+  app.post('/api/backtest/run', async (req, res) => {
+    try {
+      const symbol = (req.body.symbol as string) || 'EURUSD';
+      const timeframe = (req.body.timeframe as Timeframe) || 'H1';
+
+      const { scorecardService } = await import('./src/backtest/scorecards');
+      const startTime = Date.now();
+      const updatedScorecards = scorecardService.runBacktest(symbol, timeframe);
+      const durationMs = Date.now() - startTime;
+
+      res.json({
+        success: true,
+        symbol,
+        timeframe,
+        durationMs,
+        scorecards: updatedScorecards,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 14. Phase 5: Multi-Asset Scanner & Ranked Opportunities
+  app.get('/api/scanner/ranked-opportunities', async (_req, res) => {
+    try {
+      const { scannerService } = await import('./src/scheduler/scannerService');
+      const opportunities = scannerService.getRankedOpportunities();
+      const lastScanTime = scannerService.getLastScanTime();
+      const isScanning = scannerService.getIsScanning();
+      res.json({ success: true, opportunities, lastScanTime, isScanning });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/scanner/run-all', async (req, res) => {
+    try {
+      const timeframe = (req.body.timeframe as Timeframe) || 'H1';
+      const { scannerService } = await import('./src/scheduler/scannerService');
+      const startTime = Date.now();
+      const opportunities = await scannerService.scanAll(timeframe);
+      const durationMs = Date.now() - startTime;
+      res.json({ success: true, timeframe, durationMs, opportunities });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 15. Phase 5: Alerts & Webhook Dispatcher
+  app.get('/api/alerts/history', async (_req, res) => {
+    try {
+      const { alertService } = await import('./src/scheduler/alertService');
+      res.json({ success: true, alerts: alertService.getHistory(), config: alertService.getConfig() });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/alerts/config', async (req, res) => {
+    try {
+      const { alertService } = await import('./src/scheduler/alertService');
+      const updated = alertService.updateConfig(req.body);
+      res.json({ success: true, config: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/alerts/test', async (req, res) => {
+    try {
+      const symbol = (req.body.symbol as string) || 'EURUSD';
+      const { alertService } = await import('./src/scheduler/alertService');
+      const alert = await alertService.sendTestAlert(symbol);
+      res.json({ success: true, alert });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 16. Phase 6: Paper Trading Simulator & Bayesian Scorecard Feedback Loop
+  app.get('/api/paper-trading/summary', async (_req, res) => {
+    try {
+      const { paperTrader } = await import('./src/backtest/paperTrader');
+      res.json({
+        success: true,
+        summary: paperTrader.getAccountSummary(),
+        openPositions: paperTrader.getOpenPositions(),
+        closedPositions: paperTrader.getClosedPositions(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/paper-trading/open', async (req, res) => {
+    try {
+      const { opportunity, agentVotes } = req.body;
+      const { paperTrader } = await import('./src/backtest/paperTrader');
+      const position = paperTrader.openPositionFromOpportunity(opportunity, agentVotes);
+      res.json({ success: true, position });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/paper-trading/simulate-tick', async (_req, res) => {
+    try {
+      const { paperTrader } = await import('./src/backtest/paperTrader');
+      const result = await paperTrader.simulateMarketTick();
+      res.json({
+        success: true,
+        ...result,
+        summary: paperTrader.getAccountSummary(),
+        openPositions: paperTrader.getOpenPositions(),
+        closedPositions: paperTrader.getClosedPositions(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/paper-trading/close', async (req, res) => {
+    try {
+      const { id, reason } = req.body;
+      const { paperTrader } = await import('./src/backtest/paperTrader');
+      const position = paperTrader.closePosition(id, reason);
+      res.json({
+        success: true,
+        position,
+        summary: paperTrader.getAccountSummary(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Vite middlewares for frontend SPA in development
+  const isProd = process.env.NODE_ENV === 'production';
+  if (!isProd) {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    app.use(express.static(path.resolve(__dirname, 'dist')));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+    });
+  }
+
+  app.listen(port, () => {
+    console.log(`[Quant Market Scanner] Server listening on port ${port}`);
+  });
+}
+
+startServer().catch((err) => {
+  console.error('[Quant Market Scanner] Failed to start server:', err);
+});
