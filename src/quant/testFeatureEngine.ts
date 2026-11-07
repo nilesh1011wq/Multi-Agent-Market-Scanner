@@ -148,7 +148,8 @@ export function runQuantTests() {
   return true;
 }
 
-// If run directly via tsx
-if (import.meta.url.endsWith('testFeatureEngine.ts') || process.argv[1]?.includes('testFeatureEngine')) {
+// If run directly via tsx CLI
+const isDirectCli = typeof process !== 'undefined' && process.argv[1]?.endsWith('testFeatureEngine.ts');
+if (isDirectCli) {
   runQuantTests();
 }

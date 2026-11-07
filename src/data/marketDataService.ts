@@ -28,38 +28,284 @@ export const TIMEFRAME_MINUTES: Record<Timeframe, number> = {
   W1: 10080,
 };
 
-// Seed prices for authentic simulation / fallback
-const BASE_PRICES: Record<string, { price: number; atr: number }> = {
-  EURUSD: { price: 1.0845, atr: 0.0065 },
-  GBPUSD: { price: 1.2980, atr: 0.0085 },
-  USDJPY: { price: 152.35, atr: 1.15 },
-  AUDUSD: { price: 0.6580, atr: 0.0055 },
-  USDCAD: { price: 1.3890, atr: 0.0062 },
-  USDCHF: { price: 0.8660, atr: 0.0052 },
-  NZDUSD: { price: 0.5960, atr: 0.0050 },
-  XAUUSD: { price: 2745.5, atr: 32.5 },
-  XAGUSD: { price: 33.85, atr: 0.85 },
-  WTI: { price: 71.4, atr: 1.95 },
-  BRENT: { price: 75.8, atr: 1.9 },
-  NATGAS: { price: 2.78, atr: 0.14 },
+// Seed prices calibrated to current real market pricing
+export const BASE_PRICES: Record<string, { price: number; atr: number }> = {
+  EURUSD: { price: 1.1143, atr: 0.0065 },
+  GBPUSD: { price: 1.3356, atr: 0.0085 },
+  USDJPY: { price: 158.425, atr: 1.15 },
+  AUDUSD: { price: 0.6868, atr: 0.0055 },
+  USDCAD: { price: 1.4128, atr: 0.0062 },
+  USDCHF: { price: 0.8200, atr: 0.0052 },
+  NZDUSD: { price: 0.5548, atr: 0.0050 },
+  XAUUSD: { price: 4074.9, atr: 35.5 },
+  XAGUSD: { price: 51.94, atr: 0.95 },
+  WTI: { price: 90.83, atr: 1.95 },
+  BRENT: { price: 98.32, atr: 1.90 },
+  NATGAS: { price: 2.998, atr: 0.14 },
 };
+
+export interface LiveMarketQuote {
+  symbol: string;
+  yahooTicker: string;
+  price: number;
+  bid: number;
+  ask: number;
+  high: number;
+  low: number;
+  prevClose: number;
+  change: number;
+  changePercent: number;
+  timestamp: number;
+  source: 'LIVE_YAHOO' | 'CACHE' | 'ANCHOR';
+}
+
+/**
+ * Cache for live quotes to avoid redundant external network roundtrips
+ */
+const quoteCache: Map<string, { quote: LiveMarketQuote; expiresAt: number }> = new Map();
+const QUOTE_CACHE_TTL_MS = 15000; // 15 seconds
+
+/**
+ * Fetch a single live quote from Yahoo Finance API with automatic failover
+ */
+export async function fetchLiveMarketQuote(symbol: string): Promise<LiveMarketQuote> {
+  const cfg = WATCHLIST.find((w) => w.symbol.toUpperCase() === symbol.toUpperCase()) || {
+    symbol,
+    name: symbol,
+    assetClass: 'FOREX' as const,
+    pipSize: 0.0001,
+    digits: 5,
+    minSpread: 0.0001,
+    yahooTicker: `${symbol}=X`,
+  };
+
+  const now = Date.now();
+  const cached = quoteCache.get(symbol);
+  if (cached && cached.expiresAt > now) {
+    return cached.quote;
+  }
+
+  const base = BASE_PRICES[symbol] ?? { price: 100, atr: 1.0 };
+  let currentPrice = base.price;
+  let prevClose = base.price;
+  let dayHigh = base.price * 1.008;
+  let dayLow = base.price * 0.992;
+  let source: LiveMarketQuote['source'] = 'ANCHOR';
+
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(cfg.yahooTicker)}?interval=1h&range=2d`;
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(3500),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const meta = data.chart?.result?.[0]?.meta;
+      if (meta && typeof meta.regularMarketPrice === 'number' && !isNaN(meta.regularMarketPrice)) {
+        currentPrice = meta.regularMarketPrice;
+        prevClose = typeof meta.chartPreviousClose === 'number' ? meta.chartPreviousClose : currentPrice;
+        dayHigh = typeof meta.regularMarketDayHigh === 'number' ? meta.regularMarketDayHigh : currentPrice * 1.004;
+        dayLow = typeof meta.regularMarketDayLow === 'number' ? meta.regularMarketDayLow : currentPrice * 0.996;
+        source = 'LIVE_YAHOO';
+
+        // Update baseline anchor dynamically so subsequent calls stay anchored to reality
+        BASE_PRICES[symbol] = {
+          price: currentPrice,
+          atr: base.atr,
+        };
+      }
+    }
+  } catch (err: any) {
+    // If external call timed out or failed, fall back safely to cached or calibrated price
+    if (cached) return cached.quote;
+  }
+
+  const spread = cfg.minSpread || cfg.pipSize * 1.5;
+  const bid = Math.round((currentPrice - spread / 2) * 100000) / 100000;
+  const ask = Math.round((currentPrice + spread / 2) * 100000) / 100000;
+  const change = Math.round((currentPrice - prevClose) * 100000) / 100000;
+  const changePercent = prevClose > 0 ? Math.round(((currentPrice - prevClose) / prevClose) * 10000) / 100 : 0;
+
+  const quote: LiveMarketQuote = {
+    symbol,
+    yahooTicker: cfg.yahooTicker,
+    price: currentPrice,
+    bid,
+    ask,
+    high: Math.round(dayHigh * 100000) / 100000,
+    low: Math.round(dayLow * 100000) / 100000,
+    prevClose,
+    change,
+    changePercent,
+    timestamp: now,
+    source,
+  };
+
+  quoteCache.set(symbol, { quote, expiresAt: now + QUOTE_CACHE_TTL_MS });
+  return quote;
+}
+
+/**
+ * Fetch live quotes for all 12 assets in parallel
+ */
+export async function fetchAllLiveMarketQuotes(): Promise<Record<string, LiveMarketQuote>> {
+  const quotes: Record<string, LiveMarketQuote> = {};
+  await Promise.all(
+    WATCHLIST.map(async (item) => {
+      try {
+        const q = await fetchLiveMarketQuote(item.symbol);
+        quotes[item.symbol] = q;
+      } catch {
+        const base = BASE_PRICES[item.symbol] ?? { price: 100, atr: 1.0 };
+        quotes[item.symbol] = {
+          symbol: item.symbol,
+          yahooTicker: item.yahooTicker,
+          price: base.price,
+          bid: base.price - item.minSpread / 2,
+          ask: base.price + item.minSpread / 2,
+          high: base.price * 1.005,
+          low: base.price * 0.995,
+          prevClose: base.price,
+          change: 0,
+          changePercent: 0,
+          timestamp: Date.now(),
+          source: 'ANCHOR',
+        };
+      }
+    })
+  );
+  return quotes;
+}
+
+/**
+ * Fetch real OHLC candles from Yahoo Finance API
+ */
+async function fetchYahooCandles(symbol: string, timeframe: Timeframe, n = 120): Promise<Candle[] | null> {
+  const cfg = WATCHLIST.find((w) => w.symbol === symbol);
+  if (!cfg) return null;
+
+  let interval = '1h';
+  let range = '5d';
+
+  if (timeframe === 'M15') {
+    interval = '15m';
+    range = '2d';
+  } else if (timeframe === 'H1') {
+    interval = '1h';
+    range = '7d';
+  } else if (timeframe === 'H4') {
+    interval = '1h';
+    range = '20d';
+  } else if (timeframe === 'D1') {
+    interval = '1d';
+    range = '6mo';
+  } else if (timeframe === 'W1') {
+    interval = '1wk';
+    range = '2y';
+  }
+
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(cfg.yahooTicker)}?interval=${interval}&range=${range}`;
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        Accept: 'application/json',
+      },
+      signal: AbortSignal.timeout(4000),
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    const result = data.chart?.result?.[0];
+    if (!result || !result.timestamp || result.timestamp.length === 0) return null;
+
+    const timestamps = result.timestamp as number[];
+    const quote = result.indicators?.quote?.[0];
+    if (!quote || !quote.open) return null;
+
+    const rawCandles: Candle[] = [];
+    for (let i = 0; i < timestamps.length; i++) {
+      const open = quote.open[i];
+      const high = quote.high[i];
+      const low = quote.low[i];
+      const close = quote.close[i];
+      const volume = quote.volume?.[i] || Math.floor(1000 + Math.random() * 2000);
+
+      // Filter out null or NaN bars
+      if (
+        typeof open === 'number' &&
+        typeof high === 'number' &&
+        typeof low === 'number' &&
+        typeof close === 'number' &&
+        !isNaN(open) &&
+        !isNaN(high) &&
+        !isNaN(low) &&
+        !isNaN(close)
+      ) {
+        rawCandles.push({
+          timestamp: timestamps[i] * 1000,
+          open: Math.round(open * 100000) / 100000,
+          high: Math.round(high * 100000) / 100000,
+          low: Math.round(low * 100000) / 100000,
+          close: Math.round(close * 100000) / 100000,
+          volume,
+        });
+      }
+    }
+
+    if (rawCandles.length < 15) return null;
+
+    // Aggregate to H4 if requested
+    if (timeframe === 'H4') {
+      const h4Candles: Candle[] = [];
+      for (let i = 0; i < rawCandles.length; i += 4) {
+        const chunk = rawCandles.slice(i, i + 4);
+        if (chunk.length === 0) continue;
+        const open = chunk[0].open;
+        const close = chunk[chunk.length - 1].close;
+        const high = Math.max(...chunk.map((c) => c.high));
+        const low = Math.min(...chunk.map((c) => c.low));
+        const volume = chunk.reduce((sum, c) => sum + c.volume, 0);
+
+        h4Candles.push({
+          timestamp: chunk[0].timestamp,
+          open,
+          high,
+          low,
+          close,
+          volume,
+        });
+      }
+      return h4Candles.slice(-n);
+    }
+
+    return rawCandles.slice(-n);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Generates continuous synthetic yet highly realistic multi-timeframe candles
- * with trending waves, mean-reverting ranges, volatility regimes, and tick volume.
+ * anchored to the real-time market price.
  */
 export function generateRealisticCandles(
   symbol: string,
   timeframe: Timeframe,
-  n = 120
+  n = 120,
+  anchorPrice?: number
 ): Candle[] {
   const base = BASE_PRICES[symbol] ?? { price: 100, atr: 1.0 };
+  const targetLatestPrice = anchorPrice || base.price;
   const tfMins = TIMEFRAME_MINUTES[timeframe];
   const stepMs = tfMins * 60 * 1000;
   const now = Date.now();
 
   const candles: Candle[] = [];
-  let currentPrice = base.price;
   const tfAtrMultiplier = Math.sqrt(tfMins / 60);
   const tfAtr = base.atr * tfAtrMultiplier;
 
@@ -67,19 +313,22 @@ export function generateRealisticCandles(
   const cycleFreq = 0.08;
   const trendSlope = (symbol === 'XAUUSD' ? 0.0006 : symbol === 'USDJPY' ? 0.0004 : -0.0002) * tfAtr;
 
-  for (let i = n; i >= 0; i--) {
+  // We build backwards from targetLatestPrice so that candles[last].close matches targetLatestPrice exactly
+  let currentClose = targetLatestPrice;
+
+  for (let i = 0; i <= n; i++) {
     const timestamp = now - i * stepMs;
     const wave = Math.sin(i * cycleFreq) * (tfAtr * 0.8);
     const noise = (Math.random() - 0.49) * tfAtr * 0.6;
     const delta = trendSlope + (wave - Math.sin((i + 1) * cycleFreq) * (tfAtr * 0.8)) + noise;
 
-    const open = currentPrice;
-    const close = Math.max(0.0001, open + delta);
+    const close = currentClose;
+    const open = Math.max(0.0001, close - delta);
     const high = Math.max(open, close) + Math.random() * tfAtr * 0.5;
     const low = Math.min(open, close) - Math.random() * tfAtr * 0.5;
     const volume = Math.floor(1200 + Math.random() * 3500 + (Math.abs(delta) / tfAtr) * 2000);
 
-    candles.push({
+    candles.unshift({
       timestamp,
       open: Math.round(open * 100000) / 100000,
       high: Math.round(high * 100000) / 100000,
@@ -88,7 +337,7 @@ export function generateRealisticCandles(
       volume,
     });
 
-    currentPrice = close;
+    currentClose = open;
   }
 
   return candles;
@@ -97,17 +346,33 @@ export function generateRealisticCandles(
 export class DefaultMarketDataProvider implements IDataProvider {
   name = 'Yahoo Finance & Quant Multi-Timeframe Feed';
 
-  private candleCache: Map<string, Candle[]> = new Map();
+  private candleCache: Map<string, { candles: Candle[]; expiresAt: number }> = new Map();
 
   async getCandles(symbol: string, timeframe: Timeframe, n = 120): Promise<Candle[]> {
     const cacheKey = `${symbol}_${timeframe}_${n}`;
-    if (this.candleCache.has(cacheKey)) {
-      return this.candleCache.get(cacheKey)!;
+    const now = Date.now();
+    const cached = this.candleCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return cached.candles;
     }
 
-    const candles = generateRealisticCandles(symbol, timeframe, n);
-    this.candleCache.set(cacheKey, candles);
-    return candles;
+    // 1. Try real live candles from Yahoo Finance
+    const realCandles = await fetchYahooCandles(symbol, timeframe, n);
+    if (realCandles && realCandles.length >= Math.min(n, 20)) {
+      // Update baseline price anchor to latest real candle
+      const latestPrice = realCandles[realCandles.length - 1].close;
+      if (BASE_PRICES[symbol]) {
+        BASE_PRICES[symbol].price = latestPrice;
+      }
+      this.candleCache.set(cacheKey, { candles: realCandles, expiresAt: now + 30000 });
+      return realCandles;
+    }
+
+    // 2. Fall back to realistic generator anchored to current market quote
+    const quote = await fetchLiveMarketQuote(symbol);
+    const fallbackCandles = generateRealisticCandles(symbol, timeframe, n, quote.price);
+    this.candleCache.set(cacheKey, { candles: fallbackCandles, expiresAt: now + 15000 });
+    return fallbackCandles;
   }
 
   async getNews(symbol: string): Promise<MarketNewsItem[]> {

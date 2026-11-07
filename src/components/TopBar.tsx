@@ -11,10 +11,12 @@ import {
   Wallet,
   BarChart2,
   Sliders,
-  TrendingUp
+  TrendingUp,
+  Globe,
+  Zap,
 } from 'lucide-react';
 
-export type MainViewTab = 'TERMINAL' | 'SCANNER' | 'ALERTS' | 'PAPER_TRADING' | 'SCORECARDS';
+export type MainViewTab = 'TERMINAL' | 'SCANNER' | 'ALERTS' | 'PAPER_TRADING' | 'SCORECARDS' | 'BROKER';
 
 interface TopBarProps {
   activeSymbol: string;
@@ -26,12 +28,17 @@ interface TopBarProps {
   onRunTests: () => void;
   onOpenDocs: () => void;
   onOpenSettings: () => void;
+  onOpenBrokerModal: () => void;
   testPassed: boolean | null;
   oppCount?: number;
   alertsCount?: number;
   paperEquity?: number;
   engineMode?: 'AI_GEMINI' | 'QUANT_DETERMINISTIC';
   engineMessage?: string;
+  activeBrokerName?: string;
+  activeBrokerEnvironment?: 'DEMO' | 'LIVE';
+  isAutoExecutionEnabled?: boolean;
+  brokerPositionsCount?: number;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -44,12 +51,17 @@ export const TopBar: React.FC<TopBarProps> = ({
   onRunTests,
   onOpenDocs,
   onOpenSettings,
+  onOpenBrokerModal,
   testPassed,
   oppCount = 6,
   alertsCount = 1,
   paperEquity = 10366,
   engineMode = 'QUANT_DETERMINISTIC',
   engineMessage,
+  activeBrokerName = 'Capital.com',
+  activeBrokerEnvironment = 'DEMO',
+  isAutoExecutionEnabled = true,
+  brokerPositionsCount = 0,
 }) => {
   return (
     <header className="h-14 border-b border-slate-800 bg-[#090d16] px-4 flex items-center justify-between gap-4 shrink-0 z-20 font-mono">
@@ -126,6 +138,23 @@ export const TopBar: React.FC<TopBarProps> = ({
           </button>
 
           <button
+            onClick={() => onSelectTab('BROKER')}
+            className={`px-3 py-1.5 rounded flex items-center gap-1.5 transition-colors cursor-pointer ${
+              activeTab === 'BROKER'
+                ? 'bg-slate-800 text-cyan-300 font-bold'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+            }`}
+          >
+            <Globe className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Broker</span>
+            {brokerPositionsCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-cyan-500/20 text-cyan-300 text-[10px]">
+                {brokerPositionsCount}
+              </span>
+            )}
+          </button>
+
+          <button
             onClick={() => onSelectTab('SCORECARDS')}
             className={`px-3 py-1.5 rounded flex items-center gap-1.5 transition-colors cursor-pointer ${
               activeTab === 'SCORECARDS'
@@ -178,6 +207,32 @@ export const TopBar: React.FC<TopBarProps> = ({
 
       {/* Zone 3: Actions & Settings */}
       <div className="flex items-center gap-2 shrink-0">
+        {/* Broker Gateway Button */}
+        <button
+          onClick={onOpenBrokerModal}
+          className={`px-2.5 py-1.5 text-xs rounded border transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+            activeBrokerEnvironment === 'LIVE'
+              ? 'bg-rose-950/40 border-rose-800/80 text-rose-300 hover:bg-rose-900/50'
+              : 'bg-slate-800/80 border-slate-700 text-slate-200 hover:bg-slate-700/80'
+          }`}
+          title="Connect & Configure Capital.com, MT5, or IG Markets credentials"
+        >
+          <Globe className="w-3.5 h-3.5 text-cyan-400" />
+          <span className="font-bold">{activeBrokerName}</span>
+          <span
+            className={`text-[9px] px-1 py-0.2 rounded font-bold ${
+              activeBrokerEnvironment === 'LIVE'
+                ? 'bg-rose-500/20 text-rose-300'
+                : 'bg-amber-500/20 text-amber-300'
+            }`}
+          >
+            {activeBrokerEnvironment}
+          </span>
+          {isAutoExecutionEnabled && (
+            <span className="text-[9px] text-emerald-400 font-bold hidden sm:inline">⚡AUTO</span>
+          )}
+        </button>
+
         <button
           onClick={onRunTests}
           className="px-2.5 py-1.5 text-xs text-slate-300 bg-slate-800/80 hover:bg-slate-700/80 rounded border border-slate-700 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"

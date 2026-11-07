@@ -1,6 +1,6 @@
 {
-  "summary": "Comprehensive architectural blueprint, database schema, folder structure, and exact system prompts for the 10 specialist AI agents and 1 chief arbiter for the Multi-Agent Market Scanner web application.",
-  "updatedAt": "2026-11-02T17:38:25.595001200Z",
-  "requestFeedback": true,
-  "userFacing": true
+  "summary":  "Institutional Broker Gateway integration architecture for Capital.com, MetaTrader 5 (MetaAPI), and OANDA across Demo and Live accounts. Features server-side AES-256 encrypted credential management, automated execution engine triggered upon Chief Arbiter consensus with Risk Manager pre-trade gates, and live execution audit telemetry.",
+  "updatedAt":  "2026-11-07T13:59:35.042548475Z",
+  "requestFeedback":  true,
+  "userFacing":  true
 }

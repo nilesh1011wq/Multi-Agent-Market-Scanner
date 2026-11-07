@@ -3,7 +3,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
-import { marketDataService, WATCHLIST } from './src/data/marketDataService';
+import { marketDataService, WATCHLIST, fetchLiveMarketQuote, fetchAllLiveMarketQuotes } from './src/data/marketDataService';
+import { getAllInstrumentMappings } from './src/broker/symbolMapper';
 import { buildFeatureSnapshot, buildMultiTimeframeSnapshot } from './src/quant/snapshot';
 import { queryHistoricalAnalogs } from './src/analogs/analogEngine';
 import { getCOTData } from './src/analogs/cotEngine';
@@ -26,6 +27,31 @@ async function startServer() {
   // 1. Watchlist and symbol metadata
   app.get('/api/symbols', (_req, res) => {
     res.json({ success: true, watchlist: WATCHLIST });
+  });
+
+  // 1b. Real-time live market quotes for all 12 instruments
+  app.get('/api/quotes', async (_req, res) => {
+    try {
+      const quotes = await fetchAllLiveMarketQuotes();
+      res.json({ success: true, quotes });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/quote', async (req, res) => {
+    try {
+      const symbol = (req.query.symbol as string) || 'EURUSD';
+      const quote = await fetchLiveMarketQuote(symbol);
+      res.json({ success: true, quote });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 1c. Master Broker Symbol Mapping for Capital.com, MT5, and IG Markets
+  app.get('/api/broker/symbols-mapping', (_req, res) => {
+    res.json({ success: true, instruments: getAllInstrumentMappings() });
   });
 
   // 2. Multi-timeframe candle data
@@ -191,10 +217,23 @@ async function startServer() {
       });
       const durationMs = Date.now() - startTime;
 
+      // Automated Broker Execution trigger (if enabled on active broker)
+      let autoTradeResult: any = null;
+      try {
+        const { brokerManager } = await import('./src/broker/brokerManager');
+        autoTradeResult = await brokerManager.evaluateAndAutoExecute(
+          debateTranscript.arbiter,
+          snapshot
+        );
+      } catch (brokerErr: any) {
+        console.warn('[Debate] Auto-trade dispatch warning:', brokerErr.message);
+      }
+
       res.json({
         success: true,
         durationMs,
         debate: debateTranscript,
+        autoTradeResult,
       });
     } catch (err: any) {
       console.error('[API /api/debate/run] Error:', err);
@@ -369,6 +408,127 @@ async function startServer() {
         position,
         summary: paperTrader.getAccountSummary(),
       });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 17. Multi-Broker Gateway (Capital.com, MT5, IG Markets)
+  app.get('/api/broker/configs', async (_req, res) => {
+    try {
+      const { brokerVault } = await import('./src/broker/brokerVault');
+      const configs = brokerVault.getSanitizedConfigs();
+      const active = brokerVault.getActiveBroker();
+      res.json({ success: true, configs, activeBrokerId: active.id });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/broker/config', async (req, res) => {
+    try {
+      const { brokerId, config } = req.body;
+      const { brokerVault } = await import('./src/broker/brokerVault');
+      brokerVault.updateConfig(brokerId as any, config);
+      const sanitized = brokerVault.getSanitizedConfigs();
+      res.json({ success: true, config: sanitized[brokerId as keyof typeof sanitized] });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/broker/connect', async (req, res) => {
+    try {
+      const { brokerId } = req.body;
+      const { brokerManager } = await import('./src/broker/brokerManager');
+      const result = await brokerManager.connectBroker(brokerId);
+      res.json({ ...result });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/broker/select-active', async (req, res) => {
+    try {
+      const { brokerId } = req.body;
+      const { brokerVault } = await import('./src/broker/brokerVault');
+      const { brokerManager } = await import('./src/broker/brokerManager');
+      brokerVault.setActiveBroker(brokerId);
+      await brokerManager.connectBroker(brokerId);
+      res.json({ success: true, activeBrokerId: brokerId });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/broker/toggle-auto-execution', async (req, res) => {
+    try {
+      const { enabled } = req.body;
+      const { brokerVault } = await import('./src/broker/brokerVault');
+      const active = brokerVault.getActiveBroker();
+      brokerVault.updateConfig(active.id, { isAutoExecutionEnabled: !!enabled });
+      res.json({ success: true, isAutoExecutionEnabled: !!enabled, brokerId: active.id });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/broker/account', async (_req, res) => {
+    try {
+      const { brokerManager } = await import('./src/broker/brokerManager');
+      const summary = await brokerManager.getActiveAccountSummary();
+      res.json({ success: true, summary });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/broker/positions', async (_req, res) => {
+    try {
+      const { brokerManager } = await import('./src/broker/brokerManager');
+      const positions = await brokerManager.getActiveOpenPositions();
+      res.json({ success: true, positions });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/broker/order', async (req, res) => {
+    try {
+      const { order } = req.body;
+      const { brokerManager } = await import('./src/broker/brokerManager');
+      const result = await brokerManager.executeManualOrder(order);
+      res.json({ success: true, result });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/broker/close', async (req, res) => {
+    try {
+      const { brokerId, ticketId } = req.body;
+      const { brokerManager } = await import('./src/broker/brokerManager');
+      const result = await brokerManager.closePosition(brokerId, ticketId);
+      res.json({ ...result });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/broker/flatten-all', async (_req, res) => {
+    try {
+      const { brokerManager } = await import('./src/broker/brokerManager');
+      const result = await brokerManager.flattenAllActive();
+      res.json({ success: true, ...result });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/broker/audit-logs', async (_req, res) => {
+    try {
+      const { brokerManager } = await import('./src/broker/brokerManager');
+      res.json({ success: true, logs: brokerManager.getAuditLogs() });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }

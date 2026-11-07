@@ -13,7 +13,7 @@ export interface MarketNewsItem {
 
 /**
  * Pluggable data-provider interface.
- * Allows swapping between Yahoo Finance / Alpha Vantage / Finnhub / OANDA / Twelve Data.
+ * Allows swapping between Yahoo Finance / Alpha Vantage / Finnhub / IG Markets / Twelve Data.
  */
 export interface IDataProvider {
   name: string;

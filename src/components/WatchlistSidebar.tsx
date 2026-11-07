@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
-import { SymbolConfig } from '../types/market';
 import { WATCHLIST } from '../data/marketDataService';
-import { Search } from 'lucide-react';
+import { BrokerId } from '../types/broker';
+import { getBrokerSymbol } from '../broker/symbolMapper';
+import { Search, Tag } from 'lucide-react';
 
 interface WatchlistSidebarProps {
   activeSymbol: string;
   onSelectSymbol: (symbol: string) => void;
   priceMap: Record<string, number>;
   regimeMap: Record<string, string>;
+  activeBrokerId?: BrokerId;
 }
 
 export const WatchlistSidebar: React.FC<WatchlistSidebarProps> = ({
@@ -15,6 +17,7 @@ export const WatchlistSidebar: React.FC<WatchlistSidebarProps> = ({
   onSelectSymbol,
   priceMap,
   regimeMap,
+  activeBrokerId = 'CAPITAL_COM',
 }) => {
   const [filter, setFilter] = useState<'ALL' | 'FOREX' | 'COMMODITY'>('ALL');
   const [search, setSearch] = useState('');
@@ -66,6 +69,7 @@ export const WatchlistSidebar: React.FC<WatchlistSidebarProps> = ({
           const isSelected = item.symbol === activeSymbol;
           const price = priceMap[item.symbol] ?? 0;
           const regime = regimeMap[item.symbol] ?? 'evaluating';
+          const brokerEpic = getBrokerSymbol(item.symbol, activeBrokerId);
 
           let regimeColor = 'text-slate-400';
           if (regime.includes('bull')) regimeColor = 'text-emerald-400';
@@ -83,15 +87,21 @@ export const WatchlistSidebar: React.FC<WatchlistSidebarProps> = ({
               }`}
             >
               <div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="font-mono font-bold text-xs text-slate-200">
                     {item.symbol}
                   </span>
-                  <span className="text-[10px] font-mono text-slate-500">
-                    {item.assetClass === 'FOREX' ? 'FX' : 'CM'}
+                  <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-slate-800/80 text-slate-400">
+                    {item.assetClass === 'FOREX' ? 'FX' : 'COMM'}
                   </span>
+                  {brokerEpic !== item.symbol && (
+                    <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-cyan-950/80 border border-cyan-800/50 text-cyan-300 flex items-center gap-0.5" title={`Mapped Broker Epic on ${activeBrokerId}`}>
+                      <Tag className="w-2.5 h-2.5" />
+                      {brokerEpic}
+                    </span>
+                  )}
                 </div>
-                <div className="text-[11px] text-slate-400 truncate max-w-[130px]">
+                <div className="text-[11px] text-slate-400 truncate max-w-[140px] mt-0.5">
                   {item.name}
                 </div>
               </div>
@@ -110,9 +120,12 @@ export const WatchlistSidebar: React.FC<WatchlistSidebarProps> = ({
       </div>
 
       {/* Footer Info */}
-      <div className="p-2 border-t border-slate-800 text-[10px] font-mono text-slate-500 flex justify-between items-center">
-        <span>ASSETS: 12 CONFIGURED</span>
-        <span className="text-cyan-400">YAHOO / QUANT FEED</span>
+      <div className="p-2 border-t border-slate-800 text-[10px] font-mono text-slate-500 flex justify-between items-center bg-slate-950/50">
+        <span>12 ASSETS MATCHED</span>
+        <span className="text-cyan-400 flex items-center gap-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          LIVE YAHOO FEED
+        </span>
       </div>
     </aside>
   );

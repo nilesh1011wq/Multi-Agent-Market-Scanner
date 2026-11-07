@@ -13,11 +13,22 @@ import { PaperTradingPanel } from './components/PaperTradingPanel';
 import { SettingsModal } from './components/SettingsModal';
 import { TestVerificationModal } from './components/TestVerificationModal';
 import { PromptsArchitectureModal } from './components/PromptsArchitectureModal';
+import { BrokerModal } from './components/BrokerModal';
+import { LiveBrokerPositionsPanel } from './components/LiveBrokerPositionsPanel';
+import { OrderTicketModal } from './components/OrderTicketModal';
 import { Candle, FeatureSnapshot, AnalogStats, COTData, Timeframe, EconomicEvent } from './types/market';
 import { AgentName, BaseAgentOutput, FullDebateTranscript } from './types/debate';
 import { AgentScorecard } from './types/scorecard';
 import { RankedOpportunity, AlertConfig, DispatchedAlert, PaperPosition, PaperAccountSummary } from './types/scanner';
-import { Calendar, ShieldAlert, Cpu, BarChart3, Clock, AlertTriangle, Layers, Flame, Bell, Wallet } from 'lucide-react';
+import {
+  BrokerConfig,
+  BrokerId,
+  BrokerAccountSummary,
+  BrokerPosition,
+  StandardizedOrderRequest,
+} from './types/broker';
+import { ExecutionAuditLog } from './broker/brokerManager';
+import { Calendar, ShieldAlert, Cpu, BarChart3, Clock, AlertTriangle, Layers, Flame, Bell, Wallet, Globe } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<MainViewTab>('TERMINAL');
@@ -28,6 +39,45 @@ export default function App() {
   const [analogs, setAnalogs] = useState<AnalogStats | null>(null);
   const [cot, setCot] = useState<COTData | null>(null);
   const [calendar, setCalendar] = useState<EconomicEvent[]>([]);
+
+  // Broker Gateway & Live Execution State
+  const [brokerConfigs, setBrokerConfigs] = useState<Record<BrokerId, BrokerConfig>>({
+    CAPITAL_COM: {
+      id: 'CAPITAL_COM',
+      name: 'Capital.com',
+      environment: 'DEMO',
+      apiKey: '',
+      isActive: true,
+      isAutoExecutionEnabled: true,
+      status: 'CONNECTED',
+    },
+    MT5: {
+      id: 'MT5',
+      name: 'MetaTrader 5 (MetaAPI)',
+      environment: 'DEMO',
+      apiKey: '',
+      isActive: false,
+      isAutoExecutionEnabled: false,
+      status: 'DISCONNECTED',
+    },
+    IG: {
+      id: 'IG',
+      name: 'IG Markets',
+      environment: 'DEMO',
+      apiKey: '',
+      isActive: false,
+      isAutoExecutionEnabled: false,
+      status: 'DISCONNECTED',
+    },
+  });
+  const [activeBrokerId, setActiveBrokerId] = useState<BrokerId>('CAPITAL_COM');
+  const [brokerAccountSummary, setBrokerAccountSummary] = useState<BrokerAccountSummary | null>(null);
+  const [brokerPositions, setBrokerPositions] = useState<BrokerPosition[]>([]);
+  const [brokerAuditLogs, setBrokerAuditLogs] = useState<ExecutionAuditLog[]>([]);
+  const [isBrokerModalOpen, setIsBrokerModalOpen] = useState(false);
+  const [isOrderTicketOpen, setIsOrderTicketOpen] = useState(false);
+  const [isBrokerLoading, setIsBrokerLoading] = useState(false);
+  const [brokerNotification, setBrokerNotification] = useState<string | null>(null);
 
   // Prices and regimes for watchlist sidebar
   const [priceMap, setPriceMap] = useState<Record<string, number>>({});
@@ -154,12 +204,195 @@ export default function App() {
           setEngineMode(engineData.engineMode);
           setEngineMessage(engineData.message);
         }
+
+        // 6. Broker Gateway Telemetry
+        const [bConfRes, bAccRes, bPosRes, bLogsRes] = await Promise.all([
+          fetch('/api/broker/configs'),
+          fetch('/api/broker/account'),
+          fetch('/api/broker/positions'),
+          fetch('/api/broker/audit-logs'),
+        ]);
+
+        const bConfData = await bConfRes.json();
+        if (bConfData.success) {
+          setBrokerConfigs(bConfData.configs);
+          setActiveBrokerId(bConfData.activeBrokerId);
+        }
+        const bAccData = await bAccRes.json();
+        if (bAccData.success) setBrokerAccountSummary(bAccData.summary);
+
+        const bPosData = await bPosRes.json();
+        if (bPosData.success) setBrokerPositions(bPosData.positions);
+
+        const bLogsData = await bLogsRes.json();
+        if (bLogsData.success) setBrokerAuditLogs(bLogsData.logs);
       } catch (err) {
         console.error('Failed to init dashboard state:', err);
       }
     }
     initData();
   }, []);
+
+  // Real-time live quotes polling for all 12 instruments
+  useEffect(() => {
+    async function loadQuotes() {
+      try {
+        const res = await fetch('/api/quotes');
+        const data = await res.json();
+        if (data.success && data.quotes) {
+          const map: Record<string, number> = {};
+          for (const [sym, q] of Object.entries(data.quotes as Record<string, any>)) {
+            if (typeof q?.price === 'number') {
+              map[sym] = q.price;
+            }
+          }
+          setPriceMap((prev) => ({ ...prev, ...map }));
+        }
+      } catch (err) {
+        console.error('Failed to fetch live quotes:', err);
+      }
+    }
+
+    loadQuotes();
+    const interval = setInterval(loadQuotes, 15000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const refreshBrokerData = async () => {
+    setIsBrokerLoading(true);
+    try {
+      const [confRes, accRes, posRes, logsRes] = await Promise.all([
+        fetch('/api/broker/configs'),
+        fetch('/api/broker/account'),
+        fetch('/api/broker/positions'),
+        fetch('/api/broker/audit-logs'),
+      ]);
+
+      const confData = await confRes.json();
+      if (confData.success) {
+        setBrokerConfigs(confData.configs);
+        setActiveBrokerId(confData.activeBrokerId);
+      }
+
+      const accData = await accRes.json();
+      if (accData.success) setBrokerAccountSummary(accData.summary);
+
+      const posData = await posRes.json();
+      if (posData.success) setBrokerPositions(posData.positions);
+
+      const logsData = await logsRes.json();
+      if (logsData.success) setBrokerAuditLogs(logsData.logs);
+    } catch (err) {
+      console.error('Failed to sync broker data:', err);
+    } finally {
+      setIsBrokerLoading(false);
+    }
+  };
+
+  const handleSaveBrokerConfig = async (brokerId: BrokerId, updated: Partial<BrokerConfig>) => {
+    try {
+      const res = await fetch('/api/broker/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brokerId, config: updated }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setBrokerConfigs((prev) => ({
+          ...prev,
+          [brokerId]: { ...prev[brokerId], ...data.config },
+        }));
+      }
+    } catch (err) {
+      console.error('Failed to save broker config:', err);
+    }
+  };
+
+  const handleConnectBroker = async (brokerId: BrokerId) => {
+    const res = await fetch('/api/broker/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ brokerId }),
+    });
+    const data = await res.json();
+    await refreshBrokerData();
+    return data;
+  };
+
+  const handleSelectActiveBroker = async (brokerId: BrokerId) => {
+    const res = await fetch('/api/broker/select-active', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ brokerId }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      setActiveBrokerId(brokerId);
+      await refreshBrokerData();
+    }
+  };
+
+  const handleToggleAutoExecution = async (enabled: boolean) => {
+    const res = await fetch('/api/broker/toggle-auto-execution', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      setBrokerConfigs((prev) => ({
+        ...prev,
+        [activeBrokerId]: {
+          ...prev[activeBrokerId],
+          isAutoExecutionEnabled: enabled,
+        },
+      }));
+    }
+  };
+
+  const handleCloseBrokerPosition = async (ticketId: string) => {
+    try {
+      const res = await fetch('/api/broker/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brokerId: activeBrokerId, ticketId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        await refreshBrokerData();
+      }
+    } catch (err) {
+      console.error('Failed to close position:', err);
+    }
+  };
+
+  const handleFlattenAllBroker = async () => {
+    try {
+      const res = await fetch('/api/broker/flatten-all', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        await refreshBrokerData();
+      }
+    } catch (err) {
+      console.error('Failed to flatten positions:', err);
+    }
+  };
+
+  const handleSubmitBrokerOrder = async (order: StandardizedOrderRequest) => {
+    const res = await fetch('/api/broker/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      setBrokerNotification(`Order filled on ${order.brokerId}: ${order.direction} ${order.symbol} (${data.result.message})`);
+      setTimeout(() => setBrokerNotification(null), 6000);
+      await refreshBrokerData();
+    } else {
+      throw new Error(data.error || 'Failed to place order');
+    }
+  };
 
   const handleRunTests = async () => {
     setIsTestRunning(true);
@@ -207,6 +440,15 @@ export default function App() {
       if (data.success) {
         setDebateTranscript(data.debate);
         setDebateDurationMs(data.durationMs);
+
+        // If automated broker trade was executed, notify user and sync positions
+        if (data.autoTradeResult && data.autoTradeResult.success) {
+          setBrokerNotification(
+            `⚡ Auto-Executed on ${data.autoTradeResult.brokerId}: ${data.autoTradeResult.direction} ${data.autoTradeResult.symbol} (Ticket #${data.autoTradeResult.brokerTicketId})`
+          );
+          setTimeout(() => setBrokerNotification(null), 8000);
+          refreshBrokerData();
+        }
       }
     } catch (err) {
       console.error('Failed to execute debate:', err);
@@ -400,13 +642,34 @@ export default function App() {
         }}
         onOpenDocs={() => setIsPromptsModalOpen(true)}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
+        onOpenBrokerModal={() => setIsBrokerModalOpen(true)}
         testPassed={testPassed}
         oppCount={opportunities.length}
         alertsCount={alerts.length}
         paperEquity={paperSummary?.equity || 10366}
         engineMode={engineMode}
         engineMessage={engineMessage}
+        activeBrokerName={brokerConfigs[activeBrokerId]?.name || 'Capital.com'}
+        activeBrokerEnvironment={brokerConfigs[activeBrokerId]?.environment || 'DEMO'}
+        isAutoExecutionEnabled={brokerConfigs[activeBrokerId]?.isAutoExecutionEnabled ?? true}
+        brokerPositionsCount={brokerPositions.length}
       />
+
+      {/* Broker Auto-Execution / Alert Notification Banner */}
+      {brokerNotification && (
+        <div className="bg-emerald-950/95 border-b border-emerald-800 text-emerald-200 px-4 py-2 text-xs font-mono flex items-center justify-between z-30 shadow-lg">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+            <span className="font-bold">{brokerNotification}</span>
+          </div>
+          <button
+            onClick={() => setBrokerNotification(null)}
+            className="text-emerald-400 hover:text-white p-1"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Main Terminal Workspace */}
       <div className="flex-1 flex overflow-hidden">
@@ -416,6 +679,7 @@ export default function App() {
           onSelectSymbol={setActiveSymbol}
           priceMap={priceMap}
           regimeMap={regimeMap}
+          activeBrokerId={activeBrokerId}
         />
 
         {/* Center Main Viewport */}
@@ -425,15 +689,19 @@ export default function App() {
             <div className="flex items-center gap-2 text-cyan-300">
               <span className="font-bold">SYSTEM ACTIVE:</span>
               <span className="text-slate-300">
-                10-Agent Chamber · Chief Arbiter · 30-Yr Analog KB · Walk-Forward Backtesting · Forward Paper Trader
+                10-Agent Chamber · Chief Arbiter · Capital.com / MT5 / IG Markets Gateway · 30-Yr Analog KB
               </span>
             </div>
             <div className="flex items-center gap-3 text-slate-400">
               <span className="text-emerald-400">N ≥ 30 GATED</span>
               <span>·</span>
-              <span>STRICT NON-EXECUTION</span>
+              <span className="text-cyan-300 font-semibold">
+                BROKER: {brokerConfigs[activeBrokerId]?.name.toUpperCase()} [{brokerConfigs[activeBrokerId]?.environment}]
+              </span>
               <span>·</span>
-              <span className="text-cyan-300">BAYESIAN DYNAMIC WEIGHTS</span>
+              <span className="text-amber-400">
+                {brokerConfigs[activeBrokerId]?.isAutoExecutionEnabled ? '⚡AUTO-EXEC ON' : 'AUTO-EXEC OFF'}
+              </span>
             </div>
           </div>
 
@@ -523,6 +791,27 @@ export default function App() {
                 isRunning={isBacktestRunning}
                 symbol={activeSymbol}
                 timeframe={activeTimeframe}
+              />
+            </div>
+          )}
+
+          {/* Tab 6: Live Broker Execution Gateway (Capital.com, MT5, IG Markets) */}
+          {activeTab === 'BROKER' && (
+            <div className="p-4 space-y-4">
+              <LiveBrokerPositionsPanel
+                activeBroker={brokerConfigs[activeBrokerId] || brokerConfigs.CAPITAL_COM}
+                accountSummary={brokerAccountSummary}
+                positions={brokerPositions}
+                auditLogs={brokerAuditLogs}
+                isLoading={isBrokerLoading}
+                onRefresh={refreshBrokerData}
+                onClosePosition={handleCloseBrokerPosition}
+                onFlattenAll={handleFlattenAllBroker}
+                onOpenBrokerSettings={() => setIsBrokerModalOpen(true)}
+                onOpenManualTicket={(sym) => {
+                  if (sym) setActiveSymbol(sym);
+                  setIsOrderTicketOpen(true);
+                }}
               />
             </div>
           )}
@@ -682,6 +971,37 @@ export default function App() {
       <SettingsModal
         isOpen={isSettingsModalOpen}
         onClose={() => setIsSettingsModalOpen(false)}
+      />
+
+      {/* Multi-Broker Gateway Modal (Capital.com, MT5, IG Markets) */}
+      <BrokerModal
+        isOpen={isBrokerModalOpen}
+        onClose={() => setIsBrokerModalOpen(false)}
+        configs={brokerConfigs}
+        activeBrokerId={activeBrokerId}
+        onSaveConfig={handleSaveBrokerConfig}
+        onConnectBroker={handleConnectBroker}
+        onSelectActiveBroker={handleSelectActiveBroker}
+        onToggleAutoExecution={handleToggleAutoExecution}
+      />
+
+      {/* Manual Order Execution Ticket Modal */}
+      <OrderTicketModal
+        isOpen={isOrderTicketOpen}
+        onClose={() => setIsOrderTicketOpen(false)}
+        activeBroker={brokerConfigs[activeBrokerId] || brokerConfigs.CAPITAL_COM}
+        defaultSymbol={activeSymbol}
+        defaultDirection={debateTranscript?.arbiter?.final_recommendation === 'SELL' ? 'SELL' : 'BUY'}
+        defaultEntryPrice={candles.length > 0 ? candles[candles.length - 1].close : 1.085}
+        defaultStopLoss={
+          debateTranscript?.arbiter?.stop_loss ||
+          (candles.length > 0 ? candles[candles.length - 1].close * 0.995 : 1.08)
+        }
+        defaultTakeProfit={
+          debateTranscript?.arbiter?.take_profit?.[0] ||
+          (candles.length > 0 ? candles[candles.length - 1].close * 1.01 : 1.095)
+        }
+        onSubmitOrder={handleSubmitBrokerOrder}
       />
     </div>
   );

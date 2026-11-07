@@ -108,8 +108,8 @@ export async function runProfessionalUAT() {
     else if (config.symbol === 'USDCAD') priceRangeValid = latest.close > 1.20 && latest.close < 1.55;
     else if (config.symbol === 'USDCHF') priceRangeValid = latest.close > 0.75 && latest.close < 1.05;
     else if (config.symbol === 'NZDUSD') priceRangeValid = latest.close > 0.50 && latest.close < 0.75;
-    else if (config.symbol === 'XAUUSD') priceRangeValid = latest.close > 2000 && latest.close < 3500;
-    else if (config.symbol === 'XAGUSD') priceRangeValid = latest.close > 20 && latest.close < 50;
+    else if (config.symbol === 'XAUUSD') priceRangeValid = latest.close > 1800 && latest.close < 5000;
+    else if (config.symbol === 'XAGUSD') priceRangeValid = latest.close > 15 && latest.close < 80;
     else if (config.symbol === 'WTI') priceRangeValid = latest.close > 40 && latest.close < 120;
     else if (config.symbol === 'BRENT') priceRangeValid = latest.close > 45 && latest.close < 130;
     else if (config.symbol === 'NATGAS') priceRangeValid = latest.close > 1.0 && latest.close < 8.0;
