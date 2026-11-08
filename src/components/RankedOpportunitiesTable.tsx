@@ -25,6 +25,7 @@ interface RankedOpportunitiesTableProps {
   onRefreshScan: () => void;
   onSelectOpportunity: (symbol: string, timeframe: Timeframe) => void;
   onOpenPaperTrade: (opp: RankedOpportunity) => void;
+  onOpenManualTrade?: (opp: RankedOpportunity) => void;
   activeSymbol: string;
 }
 
@@ -34,6 +35,7 @@ export function RankedOpportunitiesTable({
   onRefreshScan,
   onSelectOpportunity,
   onOpenPaperTrade,
+  onOpenManualTrade,
   activeSymbol,
 }: RankedOpportunitiesTableProps) {
   const [filterMode, setFilterMode] = useState<'ALL' | 'BUY' | 'SELL' | 'HIGH_CONVICTION' | 'GATED'>('ALL');
@@ -303,14 +305,25 @@ export function RankedOpportunitiesTable({
                           Analyze
                         </button>
                         {opp.direction !== 'NO_TRADE' && opp.riskManagerApproval !== 'VETO' && (
-                          <button
-                            onClick={() => onOpenPaperTrade(opp)}
-                            title="Open Virtual Paper Trade (1% Risk)"
-                            className="px-2 py-1 bg-emerald-600/80 hover:bg-emerald-500 text-white rounded text-[11px] font-medium transition-colors cursor-pointer flex items-center gap-1"
-                          >
-                            <PlayCircle className="w-3 h-3" />
-                            <span>Paper</span>
-                          </button>
+                          <>
+                            <button
+                              onClick={() => onOpenPaperTrade(opp)}
+                              title="Open Virtual Paper Trade (1% Risk)"
+                              className="px-2 py-1 bg-slate-800 hover:bg-emerald-600/80 text-emerald-400 hover:text-white rounded text-[11px] font-medium transition-colors cursor-pointer flex items-center gap-1"
+                            >
+                              <PlayCircle className="w-3 h-3" />
+                              <span>Paper</span>
+                            </button>
+                            {onOpenManualTrade && (
+                              <button
+                                onClick={() => onOpenManualTrade(opp)}
+                                title="Execute Directly on Broker (Capital.com / MT5 / IG)"
+                                className="px-2 py-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded text-[11px] transition-colors cursor-pointer flex items-center gap-1 shadow-sm shadow-cyan-500/20"
+                              >
+                                <span>Broker Trade</span>
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
                     </td>

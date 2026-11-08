@@ -4,7 +4,7 @@
 
 export type Timeframe = 'M15' | 'H1' | 'H4' | 'D1' | 'W1';
 
-export type AssetClass = 'FOREX' | 'COMMODITY';
+export type AssetClass = 'FOREX' | 'COMMODITY' | 'CRYPTO';
 
 export interface SymbolConfig {
   symbol: string;

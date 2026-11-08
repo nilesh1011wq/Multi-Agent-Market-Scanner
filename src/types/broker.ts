@@ -23,6 +23,11 @@ export interface BrokerConfig {
   status: BrokerConnectionStatus;
   latencyMs?: number;
   errorMessage?: string;
+  customStartingBalance?: number;
+  hasSavedApiKey?: boolean;
+  hasSavedApiSecret?: boolean;
+  hasSavedIdentifier?: boolean;
+  isRealBrokerConnected?: boolean;
 }
 
 export interface StandardizedOrderRequest {
@@ -87,6 +92,9 @@ export interface BrokerAccountSummary {
   openPositionsCount: number;
   isConnected: boolean;
   lastSyncedAt: number;
+  isRealBrokerAccount?: boolean;
+  accountSource?: 'LIVE_BROKER_API' | 'CALIBRATED_SANDBOX';
+  brokerAccountId?: string;
 }
 
 export interface IBrokerAdapter {

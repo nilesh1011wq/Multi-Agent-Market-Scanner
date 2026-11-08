@@ -39,6 +39,7 @@ interface TopBarProps {
   activeBrokerEnvironment?: 'DEMO' | 'LIVE';
   isAutoExecutionEnabled?: boolean;
   brokerPositionsCount?: number;
+  onOpenManualTicket?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -62,6 +63,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   activeBrokerEnvironment = 'DEMO',
   isAutoExecutionEnabled = true,
   brokerPositionsCount = 0,
+  onOpenManualTicket,
 }) => {
   return (
     <header className="h-14 border-b border-slate-800 bg-[#090d16] px-4 flex items-center justify-between gap-4 shrink-0 z-20 font-mono">
@@ -207,6 +209,19 @@ export const TopBar: React.FC<TopBarProps> = ({
 
       {/* Zone 3: Actions & Settings */}
       <div className="flex items-center gap-2 shrink-0">
+        {/* Instant Manual Order Ticket Button */}
+        {onOpenManualTicket && (
+          <button
+            onClick={onOpenManualTicket}
+            className="px-2.5 py-1.5 text-xs font-bold bg-cyan-400 hover:bg-cyan-300 text-slate-950 rounded transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer shadow-sm shadow-cyan-500/20"
+            title="Open Instant Broker Order Ticket (Capital.com, MT5, IG Markets)"
+          >
+            <Sliders className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">NEW TRADE</span>
+            <span className="sm:hidden">TRADE</span>
+          </button>
+        )}
+
         {/* Broker Gateway Button */}
         <button
           onClick={onOpenBrokerModal}

@@ -141,9 +141,35 @@ export class BrokerVault {
   }
 
   public updateConfig(id: BrokerId, partial: Partial<BrokerConfig>): BrokerConfig {
+    const existing = this.configs[id] || getDefaultBrokerConfigs()[id];
+
+    // Protect existing secrets: if frontend submits masked bullet string or empty string when existing secret exists, keep existing
+    const cleanPartial = { ...partial };
+    if (cleanPartial.apiKey !== undefined) {
+      if (cleanPartial.apiKey.includes('••••') || (cleanPartial.apiKey.trim() === '' && Boolean(existing.apiKey))) {
+        delete cleanPartial.apiKey;
+      } else {
+        cleanPartial.apiKey = cleanPartial.apiKey.trim();
+      }
+    }
+    if (cleanPartial.apiSecret !== undefined) {
+      if (cleanPartial.apiSecret.includes('••••') || (cleanPartial.apiSecret.trim() === '' && Boolean(existing.apiSecret))) {
+        delete cleanPartial.apiSecret;
+      } else {
+        cleanPartial.apiSecret = cleanPartial.apiSecret.trim();
+      }
+    }
+    if (cleanPartial.identifier !== undefined) {
+      if (cleanPartial.identifier.trim() === '' && Boolean(existing.identifier)) {
+        delete cleanPartial.identifier;
+      } else {
+        cleanPartial.identifier = cleanPartial.identifier.trim();
+      }
+    }
+
     this.configs[id] = {
-      ...this.configs[id],
-      ...partial,
+      ...existing,
+      ...cleanPartial,
       id,
     };
     this.saveVault();
@@ -172,6 +198,9 @@ export class BrokerVault {
         ...conf,
         apiKey: conf.apiKey ? `••••••••${conf.apiKey.slice(-4)}` : '',
         apiSecret: conf.apiSecret ? '••••••••' : '',
+        hasSavedApiKey: Boolean(conf.apiKey && conf.apiKey.length > 5 && !conf.apiKey.includes('••••')),
+        hasSavedApiSecret: Boolean(conf.apiSecret && conf.apiSecret.length > 3 && !conf.apiSecret.includes('••••')),
+        hasSavedIdentifier: Boolean(conf.identifier && conf.identifier.length > 3),
       };
     }
     return sanitized;

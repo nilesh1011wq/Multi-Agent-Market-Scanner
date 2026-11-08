@@ -29,7 +29,7 @@ async function startServer() {
     res.json({ success: true, watchlist: WATCHLIST });
   });
 
-  // 1b. Real-time live market quotes for all 12 instruments
+  // 1b. Real-time live market quotes for all 15 instruments
   app.get('/api/quotes', async (_req, res) => {
     try {
       const quotes = await fetchAllLiveMarketQuotes();
@@ -478,6 +478,17 @@ async function startServer() {
       const { brokerManager } = await import('./src/broker/brokerManager');
       const summary = await brokerManager.getActiveAccountSummary();
       res.json({ success: true, summary });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/broker/sync-balance', async (_req, res) => {
+    try {
+      const { brokerManager } = await import('./src/broker/brokerManager');
+      const summary = await brokerManager.getActiveAccountSummary();
+      const positions = await brokerManager.getActiveOpenPositions();
+      res.json({ success: true, summary, positions });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }

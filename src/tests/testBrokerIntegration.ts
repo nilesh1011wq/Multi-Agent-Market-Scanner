@@ -142,12 +142,12 @@ async function runBrokerTests() {
   const auditData = await auditRes.json();
   assert(auditData.logs.length >= 1, `Audit trail logs recorded: ${auditData.logs.length}`);
 
-  // 11. Symbol and Epic Mapping Verification for all 12 assets
-  console.log('\n11. Verifying Multi-Broker Symbol Mapping for all 12 Assets...');
+  // 11. Symbol and Epic Mapping Verification for all 15 assets
+  console.log('\n11. Verifying Multi-Broker Symbol Mapping for all 15 Assets...');
   const mapRes = await fetch(`${baseUrl}/api/broker/symbols-mapping`);
   assert(mapRes.ok, 'GET /api/broker/symbols-mapping returned 200 OK');
   const mapData = await mapRes.json();
-  assert(mapData.instruments.length === 12, `All 12 instruments configured (found ${mapData.instruments.length})`);
+  assert(mapData.instruments.length === 15, `All 15 instruments configured (found ${mapData.instruments.length})`);
 
   const gold = mapData.instruments.find((i: any) => i.terminalSymbol === 'XAUUSD');
   assert(gold?.brokers?.CAPITAL_COM?.epic === 'GOLD', 'Gold mapped to Capital.com epic GOLD');
@@ -169,14 +169,29 @@ async function runBrokerTests() {
   assert(natgas?.brokers?.MT5?.epic === 'NG', 'NatGas mapped to MT5 symbol NG');
   assert(natgas?.brokers?.IG?.epic === 'CC.D.NG.USS.IP', 'NatGas mapped to IG epic CC.D.NG.USS.IP');
 
+  const btc = mapData.instruments.find((i: any) => i.terminalSymbol === 'BTCUSD');
+  assert(btc?.brokers?.CAPITAL_COM?.epic === 'BTCUSD', 'BTC mapped to Capital.com epic BTCUSD');
+  assert(btc?.brokers?.MT5?.epic === 'BTCUSD', 'BTC mapped to MT5 symbol BTCUSD');
+  assert(btc?.brokers?.IG?.epic === 'CS.D.BITCOIN.CFD.IP', 'BTC mapped to IG epic CS.D.BITCOIN.CFD.IP');
+
+  const eth = mapData.instruments.find((i: any) => i.terminalSymbol === 'ETHUSD');
+  assert(eth?.brokers?.CAPITAL_COM?.epic === 'ETHUSD', 'ETH mapped to Capital.com epic ETHUSD');
+  assert(eth?.brokers?.MT5?.epic === 'ETHUSD', 'ETH mapped to MT5 symbol ETHUSD');
+  assert(eth?.brokers?.IG?.epic === 'CS.D.ETHUSD.CFD.IP', 'ETH mapped to IG epic CS.D.ETHUSD.CFD.IP');
+
+  const sol = mapData.instruments.find((i: any) => i.terminalSymbol === 'SOLUSD');
+  assert(sol?.brokers?.CAPITAL_COM?.epic === 'SOLUSD', 'SOL mapped to Capital.com epic SOLUSD');
+  assert(sol?.brokers?.MT5?.epic === 'SOLUSD', 'SOL mapped to MT5 symbol SOLUSD');
+  assert(sol?.brokers?.IG?.epic === 'CS.D.SOLUSD.CFD.IP', 'SOL mapped to IG epic CS.D.SOLUSD.CFD.IP');
+
   // 12. Real-Time Live Price Data Feed Verification
-  console.log('\n12. Verifying Real-Time Live Price Data Feed for all 12 Assets...');
+  console.log('\n12. Verifying Real-Time Live Price Data Feed for all 15 Assets...');
   const quotesRes = await fetch(`${baseUrl}/api/quotes`);
   assert(quotesRes.ok, 'GET /api/quotes returned 200 OK');
   const quotesData = await quotesRes.json();
-  assert(Object.keys(quotesData.quotes).length === 12, 'Quotes received for all 12 assets');
+  assert(Object.keys(quotesData.quotes).length === 15, `Quotes received for all 15 assets (found ${Object.keys(quotesData.quotes).length})`);
 
-  for (const sym of ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'WTI', 'NATGAS']) {
+  for (const sym of ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'WTI', 'NATGAS', 'BTCUSD', 'ETHUSD', 'SOLUSD']) {
     const q = quotesData.quotes[sym];
     assert(q !== undefined, `Quote exists for ${sym}`);
     assert(q.price > 0, `Price is positive for ${sym} (${q.price})`);
@@ -185,7 +200,7 @@ async function runBrokerTests() {
   }
 
   console.log('\n======================================================');
-  console.log('🌟 ALL 12 MULTI-BROKER GATEWAY & PRICE TESTS PASSED 100% 🌟');
+  console.log('🌟 ALL 15 MULTI-BROKER GATEWAY & PRICE TESTS PASSED 100% 🌟');
   console.log('======================================================\n');
 }
 

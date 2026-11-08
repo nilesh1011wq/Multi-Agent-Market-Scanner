@@ -49,6 +49,18 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
   const brokerEpic = getBrokerSymbol(symbol, activeBroker.id);
   const brokerDetails = getBrokerSymbolDetails(symbol, activeBroker.id);
 
+  // Reset state when modal opens or defaults change
+  useEffect(() => {
+    if (isOpen) {
+      setSymbol(defaultSymbol);
+      setDirection(defaultDirection);
+      if (defaultEntryPrice) setEntryPrice(defaultEntryPrice);
+      if (defaultStopLoss) setStopLoss(defaultStopLoss);
+      if (defaultTakeProfit) setTakeProfit(defaultTakeProfit);
+      setErrorMsg(null);
+    }
+  }, [isOpen, defaultSymbol, defaultDirection, defaultEntryPrice, defaultStopLoss, defaultTakeProfit]);
+
   // When opening or changing symbol, fetch the latest real live quote
   useEffect(() => {
     if (!isOpen) return;
@@ -61,16 +73,40 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
         if (data.success && data.quote && isMounted) {
           const q = data.quote;
           const currentPrice = direction === 'BUY' ? q.ask : q.bid;
-          setEntryPrice(currentPrice);
           setLiveBid(q.bid);
           setLiveAsk(q.ask);
 
-          // Calibrate SL & TP to current real price with 1:2 R:R
-          const pipFactor = symbol.includes('JPY') ? 0.20 : symbol === 'XAUUSD' ? 25.0 : symbol === 'WTI' || symbol === 'BRENT' ? 1.5 : 0.0030;
-          const sl = direction === 'BUY' ? Math.round((currentPrice - pipFactor) * 100000) / 100000 : Math.round((currentPrice + pipFactor) * 100000) / 100000;
-          const tp = direction === 'BUY' ? Math.round((currentPrice + pipFactor * 2) * 100000) / 100000 : Math.round((currentPrice - pipFactor * 2) * 100000) / 100000;
-          setStopLoss(sl);
-          setTakeProfit(tp);
+          // If entry price wasn't explicitly provided, sync with live quote
+          if (!defaultEntryPrice || symbol !== defaultSymbol) {
+            setEntryPrice(currentPrice);
+          }
+
+          // If SL / TP were not custom specified, calibrate with 1:2 R:R
+          if (!defaultStopLoss || symbol !== defaultSymbol) {
+            const pipFactor = symbol.includes('BTC')
+              ? 1500.0
+              : symbol.includes('ETH')
+              ? 60.0
+              : symbol.includes('SOL')
+              ? 3.5
+              : symbol.includes('JPY')
+              ? 0.35
+              : symbol === 'XAUUSD'
+              ? 25.0
+              : symbol === 'WTI' || symbol === 'BRENT'
+              ? 1.5
+              : 0.0030;
+            const sl =
+              direction === 'BUY'
+                ? Math.round((currentPrice - pipFactor) * 100000) / 100000
+                : Math.round((currentPrice + pipFactor) * 100000) / 100000;
+            const tp =
+              direction === 'BUY'
+                ? Math.round((currentPrice + pipFactor * 2) * 100000) / 100000
+                : Math.round((currentPrice - pipFactor * 2) * 100000) / 100000;
+            setStopLoss(sl);
+            setTakeProfit(tp);
+          }
 
           // Set sensible default units based on broker minLot
           if (activeBroker.id === 'MT5') {

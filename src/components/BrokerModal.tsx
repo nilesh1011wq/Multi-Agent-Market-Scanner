@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrokerConfig, BrokerId, BrokerEnvironment } from '../types/broker';
 import {
   X,
@@ -47,6 +47,19 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
   });
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [isSyncingBalance, setIsSyncingBalance] = useState(false);
+  const [syncBalanceResult, setSyncBalanceResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // Keep form data synchronized with stored broker configurations so saved credentials are never wiped
+  useEffect(() => {
+    if (isOpen && configs) {
+      setFormData({
+        CAPITAL_COM: { ...configs.CAPITAL_COM },
+        MT5: { ...configs.MT5 },
+        IG: { ...configs.IG },
+      });
+    }
+  }, [isOpen, configs]);
 
   if (!isOpen) return null;
 
@@ -78,6 +91,40 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
       setTestResult({ success: false, message: err.message || 'Connection test failed' });
     } finally {
       setIsTesting(false);
+    }
+  };
+
+  const handleFetchBrokerBalance = async () => {
+    setIsSyncingBalance(true);
+    setSyncBalanceResult(null);
+    try {
+      // Ensure current changes are saved first
+      const updates = formData[selectedTab] || {};
+      await onSaveConfig(selectedTab, updates);
+
+      const res = await fetch('/api/broker/sync-balance', { method: 'POST' });
+      const data = await res.json();
+      if (data.success && data.summary) {
+        const bal = data.summary.balance;
+        const source = data.summary.isRealBrokerAccount ? 'Live Broker Account' : 'Calibrated Sandbox';
+        setSyncBalanceResult({
+          success: true,
+          message: `Successfully fetched balance: $${bal.toLocaleString('en-US', { minimumFractionDigits: 2 })} ${data.summary.currency} (${source}).`,
+        });
+        handleFieldChange('customStartingBalance', bal);
+      } else {
+        setSyncBalanceResult({
+          success: false,
+          message: data.error || 'Failed to sync balance from broker.',
+        });
+      }
+    } catch (err: any) {
+      setSyncBalanceResult({
+        success: false,
+        message: err.message || 'Failed to connect to broker balance service.',
+      });
+    } finally {
+      setIsSyncingBalance(false);
     }
   };
 
@@ -233,9 +280,16 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
               <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[11px] text-slate-400 block mb-1">
-                      Account Email / Identifier:
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] text-slate-400">
+                        Account Email / Identifier:
+                      </label>
+                      {currentBroker.hasSavedIdentifier && (
+                        <span className="text-[9px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">
+                          ✓ Saved in Vault
+                        </span>
+                      )}
+                    </div>
                     <input
                       type="text"
                       placeholder="e.g. trader@example.com"
@@ -245,13 +299,20 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
                     />
                   </div>
                   <div>
-                    <label className="text-[11px] text-slate-400 block mb-1">
-                      Account Password / Session Secret:
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] text-slate-400">
+                        Account Password / Session Secret:
+                      </label>
+                      {currentBroker.hasSavedApiSecret && (
+                        <span className="text-[9px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">
+                          ✓ Saved (leave blank to keep)
+                        </span>
+                      )}
+                    </div>
                     <input
                       type="password"
-                      placeholder="••••••••••••"
-                      value={activeForm.apiSecret ?? currentBroker.apiSecret ?? ''}
+                      placeholder={currentBroker.hasSavedApiSecret ? '•••••••• (Saved - type to change)' : 'Enter Capital.com login password'}
+                      value={activeForm.apiSecret ?? ''}
                       onChange={(e) => handleFieldChange('apiSecret', e.target.value)}
                       className="w-full bg-slate-900 border border-slate-800 px-3 py-2 rounded text-slate-200 focus:outline-none focus:border-cyan-500/50"
                     />
@@ -259,18 +320,78 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
                 </div>
 
                 <div>
-                  <label className="text-[11px] text-slate-400 block mb-1">
-                    Capital.com API Key (X-CAP-API-KEY):
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] text-slate-400">
+                      Capital.com API Key (X-CAP-API-KEY):
+                    </label>
+                    {currentBroker.hasSavedApiKey && (
+                      <span className="text-[9px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">
+                        ✓ Key Saved ({currentBroker.apiKey})
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="password"
-                    placeholder="Enter Capital.com REST API Key"
-                    value={activeForm.apiKey ?? currentBroker.apiKey ?? ''}
+                    placeholder={currentBroker.hasSavedApiKey ? '•••••••• (Saved - type to change)' : 'Enter Capital.com REST API Key'}
+                    value={activeForm.apiKey ?? ''}
                     onChange={(e) => handleFieldChange('apiKey', e.target.value)}
                     className="w-full bg-slate-900 border border-slate-800 px-3 py-2 rounded text-slate-200 focus:outline-none focus:border-cyan-500/50"
                   />
                   <span className="text-[10px] text-slate-500 mt-1 block">
-                    Found in Capital.com Settings &gt; API Integrations &gt; Generate API Key.
+                    Found in Capital.com Settings &gt; API Integrations. Note: Capital.com uses separate API keys for DEMO and LIVE accounts.
+                  </span>
+                </div>
+
+                {/* Account Balance Match / Live Auto-Fetch */}
+                <div className="bg-slate-900/80 p-3 rounded border border-slate-800/80 space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <label className="text-[11px] text-cyan-300 font-bold uppercase flex items-center gap-1.5">
+                      <span>Account Balance ($ USD)</span>
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={handleFetchBrokerBalance}
+                      disabled={isSyncingBalance}
+                      className="px-2.5 py-1 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 rounded text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${isSyncingBalance ? 'animate-spin' : ''}`} />
+                      <span>{isSyncingBalance ? 'FETCHING FROM BROKER...' : 'FETCH LIVE BALANCE FROM BROKER'}</span>
+                    </button>
+                  </div>
+
+                  {syncBalanceResult && (
+                    <div
+                      className={`p-2 rounded text-[11px] flex items-center gap-2 ${
+                        syncBalanceResult.success
+                          ? 'bg-emerald-950/60 border border-emerald-800 text-emerald-300'
+                          : 'bg-rose-950/60 border border-rose-800 text-rose-300'
+                      }`}
+                    >
+                      {syncBalanceResult.success ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                      )}
+                      <span>{syncBalanceResult.message}</span>
+                    </div>
+                  )}
+
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="e.g. 10000.00 (Enter your exact Capital.com account balance)"
+                    value={activeForm.customStartingBalance ?? currentBroker.customStartingBalance ?? ''}
+                    onChange={(e) =>
+                      handleFieldChange(
+                        'customStartingBalance',
+                        e.target.value ? parseFloat(e.target.value) : undefined
+                      )
+                    }
+                    className="w-full bg-slate-950 border border-slate-800 px-3 py-2 rounded text-cyan-300 font-bold tabular-nums focus:outline-none focus:border-cyan-500/50"
+                  />
+                  <span className="text-[10px] text-slate-400 block">
+                    Automatically queried from Capital.com API when authenticated, or set custom to match your broker balance 1:1.
                   </span>
                 </div>
               </>

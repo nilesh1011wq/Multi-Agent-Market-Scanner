@@ -1,6 +1,6 @@
-# Multi-Broker Live & Demo Execution Gateway (Capital.com, MT5, OANDA)
+# Multi-Broker Live & Demo Execution Gateway (Capital.com, MT5, IG Markets)
 
-Unified institutional broker gateway connecting the Multi-Agent Quantitative Terminal to Capital.com, MetaTrader 5 (MT5 via MetaAPI), and OANDA. Enables seamless switching between Demo and Live accounts, server-side encrypted credential management, real-time balance and position synchronization, and automated order execution directly triggered by the Chief Arbiter upon meeting Risk Manager safety gates.
+Unified institutional broker gateway connecting the Multi-Agent Quantitative Terminal to Capital.com, MetaTrader 5 (MT5 via MetaAPI), and IG Markets. Enables seamless switching between Demo and Live accounts, server-side encrypted credential management, real-time balance and position synchronization, and automated order execution directly triggered by the Chief Arbiter upon meeting Risk Manager safety gates across 15 Forex, Commodity, and Crypto assets.
 
 ---
 
@@ -9,7 +9,8 @@ Unified institutional broker gateway connecting the Multi-Agent Quantitative Ter
 > [!IMPORTANT]
 > The following architectural parameters were selected during interactive clarification and are locked into this plan:
 >
-> - **Supported Broker Adapters**: Native support for **Capital.com** (REST v1 sessions with CST and security tokens), **MetaTrader 5** (MT5 Cloud REST via MetaAPI), and **OANDA** (v20 REST API).
+> - **Supported Broker Adapters**: Native support for **Capital.com** (REST v1 sessions with CST and security tokens), **MetaTrader 5** (MT5 Cloud REST via MetaAPI), and **IG Markets** (REST API with CST/X-SECURITY-TOKEN and CFD epics).
+> - **Watchlist Scope**: 15 Assets spanning Forex Majors (7), Commodities (5), and Crypto (3: `BTCUSD`, `ETHUSD`, `SOLUSD`) with verified live price feeds from Yahoo Finance and matching broker epics.
 > - **Execution Mode**: **Automated Auto-Execution** triggered whenever the Chief Arbiter generates an actionable `BUY` or `SELL` consensus with Risk Manager approval (`R:R >= 1.5`, valid ATR-based Stop Loss & Take Profits, no active economic blackout). Includes manual emergency kill-switch and manual order ticket overrides.
 > - **Credential Security & Key Management**: **Server-Side Encrypted Vault** (AES-256-GCM with environment salt) paired with an intuitive credential management modal for setting API keys, account identifiers, environment toggles (`DEMO` vs `LIVE`), and connection ping diagnostics.
 
@@ -21,7 +22,7 @@ Unified institutional broker gateway connecting the Multi-Agent Quantitative Ter
 The Multi-Broker Execution Gateway transforms the Quant Terminal from an analytical and paper-trading research suite into a live operational trading terminal. 
 
 Key capabilities:
-1. **Multi-Broker Credential Manager**: A dedicated security drawer allowing traders to configure API credentials, switch between **Demo** (practice sandbox) and **Live** (real capital) accounts, and verify connectivity with latency ping checks across Capital.com, MT5, and OANDA.
+1. **Multi-Broker Credential Manager**: A dedicated security drawer allowing traders to configure API credentials, switch between **Demo** (practice sandbox) and **Live** (real capital) accounts, and verify connectivity with latency ping checks across Capital.com, MT5, and IG Markets.
 2. **Standardized Broker Abstraction Layer (IBrokerAdapter)**: Uniform internal interface mapping terminal symbols (`EURUSD`, `XAUUSD`, `WTI`, etc.) to broker-specific epics/tickers (`EUR_USD`, `GOLD`, `US_OIL`), standardizing lot sizing, pip precision, and order structures.
 3. **Automated Order Dispatch Pipeline**: Automatically translates Chief Arbiter recommendations into market/limit orders with hardcoded Stop Loss and Take Profit brackets.
 4. **Pre-Trade Risk Gate Enforcement**: Every outbound order must pass the Risk Manager's pre-trade checks (R:R $\ge 1.5$, max 1% account risk sizing, spread ceiling check, and economic blackout protection) before reaching the broker network.

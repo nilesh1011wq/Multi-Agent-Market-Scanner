@@ -18,6 +18,11 @@ export const WATCHLIST: SymbolConfig[] = [
   { symbol: 'WTI', name: 'Crude Oil WTI Cash', assetClass: 'COMMODITY', pipSize: 0.01, digits: 2, minSpread: 0.03, yahooTicker: 'CL=F' },
   { symbol: 'BRENT', name: 'Brent Crude Oil Cash', assetClass: 'COMMODITY', pipSize: 0.01, digits: 2, minSpread: 0.035, yahooTicker: 'BZ=F' },
   { symbol: 'NATGAS', name: 'Natural Gas Henry Hub', assetClass: 'COMMODITY', pipSize: 0.001, digits: 3, minSpread: 0.004, yahooTicker: 'NG=F' },
+
+  // Major Cryptocurrencies
+  { symbol: 'BTCUSD', name: 'Bitcoin / US Dollar', assetClass: 'CRYPTO', pipSize: 1.0, digits: 2, minSpread: 12.0, yahooTicker: 'BTC-USD' },
+  { symbol: 'ETHUSD', name: 'Ethereum / US Dollar', assetClass: 'CRYPTO', pipSize: 0.1, digits: 2, minSpread: 1.2, yahooTicker: 'ETH-USD' },
+  { symbol: 'SOLUSD', name: 'Solana / US Dollar', assetClass: 'CRYPTO', pipSize: 0.01, digits: 2, minSpread: 0.15, yahooTicker: 'SOL-USD' },
 ];
 
 export const TIMEFRAME_MINUTES: Record<Timeframe, number> = {
@@ -42,6 +47,9 @@ export const BASE_PRICES: Record<string, { price: number; atr: number }> = {
   WTI: { price: 90.83, atr: 1.95 },
   BRENT: { price: 98.32, atr: 1.90 },
   NATGAS: { price: 2.998, atr: 0.14 },
+  BTCUSD: { price: 75773.76, atr: 1850.0 },
+  ETHUSD: { price: 2235.78, atr: 75.0 },
+  SOLUSD: { price: 89.81, atr: 4.5 },
 };
 
 export interface LiveMarketQuote {

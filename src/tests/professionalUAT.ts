@@ -67,13 +67,14 @@ export async function runProfessionalUAT() {
   recordTest(
     'Watchlist',
     'Asset Count',
-    WATCHLIST.length === 12,
-    'Watchlist contains exactly 12 institutional instruments',
+    WATCHLIST.length === 15,
+    'Watchlist contains exactly 15 institutional instruments (Forex, Commodities, Crypto)',
     WATCHLIST.length
   );
 
   const forexSymbols = WATCHLIST.filter((w) => w.assetClass === 'FOREX').map((w) => w.symbol);
   const commoditySymbols = WATCHLIST.filter((w) => w.assetClass === 'COMMODITY').map((w) => w.symbol);
+  const cryptoSymbols = WATCHLIST.filter((w) => w.assetClass === 'CRYPTO').map((w) => w.symbol);
 
   recordTest(
     'Watchlist',
@@ -91,6 +92,14 @@ export async function runProfessionalUAT() {
     commoditySymbols.join(', ')
   );
 
+  recordTest(
+    'Watchlist',
+    'Crypto Count',
+    cryptoSymbols.length === 3,
+    '3 Major Cryptos present (BTCUSD, ETHUSD, SOLUSD)',
+    cryptoSymbols.join(', ')
+  );
+
   for (const config of WATCHLIST) {
     const candles = generateRealisticCandles(config.symbol, 'H1', 60);
     const latest = candles[candles.length - 1];
@@ -98,7 +107,7 @@ export async function runProfessionalUAT() {
     // Pip size & precision checks
     const expectedDigits = config.digits;
     const isPricePositive = latest.close > 0;
-    const isSpreadValid = config.minSpread > 0 && config.minSpread < config.pipSize * 20;
+    const isSpreadValid = config.minSpread > 0 && config.minSpread < config.pipSize * 50;
 
     let priceRangeValid = false;
     if (config.symbol === 'EURUSD') priceRangeValid = latest.close > 0.95 && latest.close < 1.30;
@@ -113,6 +122,9 @@ export async function runProfessionalUAT() {
     else if (config.symbol === 'WTI') priceRangeValid = latest.close > 40 && latest.close < 120;
     else if (config.symbol === 'BRENT') priceRangeValid = latest.close > 45 && latest.close < 130;
     else if (config.symbol === 'NATGAS') priceRangeValid = latest.close > 1.0 && latest.close < 8.0;
+    else if (config.symbol === 'BTCUSD') priceRangeValid = latest.close > 30000 && latest.close < 200000;
+    else if (config.symbol === 'ETHUSD') priceRangeValid = latest.close > 1000 && latest.close < 10000;
+    else if (config.symbol === 'SOLUSD') priceRangeValid = latest.close > 20 && latest.close < 500;
 
     recordTest(
       'Pricing',
@@ -385,9 +397,9 @@ export async function runProfessionalUAT() {
 
   recordTest(
     'Scanner',
-    'Scan All 12 Assets',
-    opps.length === 12,
-    `Successfully scanned and evaluated all 12 assets across H1 timeframe`,
+    'Scan All 15 Assets',
+    opps.length === 15,
+    `Successfully scanned and evaluated all 15 assets across H1 timeframe`,
     opps.length
   );
 

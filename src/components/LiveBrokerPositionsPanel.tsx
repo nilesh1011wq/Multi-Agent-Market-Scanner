@@ -199,15 +199,26 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
         {/* Account Balances Grid */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 pt-3">
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800/80">
-            <span className="text-[10px] text-slate-400 block uppercase">Balance</span>
+            <div className="flex items-center justify-between mb-0.5">
+              <span className="text-[10px] text-slate-400 block uppercase">Balance</span>
+              {accountSummary?.isRealBrokerAccount ? (
+                <span className="text-[8px] font-bold px-1 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  LIVE BROKER
+                </span>
+              ) : (
+                <span className="text-[8px] font-semibold px-1 rounded bg-slate-800 text-slate-400">
+                  SANDBOX
+                </span>
+              )}
+            </div>
             <span className="font-bold text-slate-100 text-sm tabular-nums">
-              ${accountSummary ? accountSummary.balance.toLocaleString('en-US', { minimumFractionDigits: 2 }) : '100,000.00'}
+              ${accountSummary ? accountSummary.balance.toLocaleString('en-US', { minimumFractionDigits: 2 }) : (activeBroker.customStartingBalance || 15000).toLocaleString('en-US', { minimumFractionDigits: 2 })}
             </span>
           </div>
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800/80">
             <span className="text-[10px] text-slate-400 block uppercase">Equity</span>
             <span className="font-bold text-slate-100 text-sm tabular-nums">
-              ${accountSummary ? accountSummary.equity.toLocaleString('en-US', { minimumFractionDigits: 2 }) : '100,000.00'}
+              ${accountSummary ? accountSummary.equity.toLocaleString('en-US', { minimumFractionDigits: 2 }) : (activeBroker.customStartingBalance || 15000).toLocaleString('en-US', { minimumFractionDigits: 2 })}
             </span>
           </div>
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800/80">
@@ -230,7 +241,7 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800/80">
             <span className="text-[10px] text-slate-400 block uppercase">Free Margin</span>
             <span className="font-bold text-cyan-300 text-sm tabular-nums">
-              ${accountSummary ? accountSummary.marginFree.toLocaleString('en-US', { minimumFractionDigits: 2 }) : '100,000.00'}
+              ${accountSummary ? accountSummary.marginFree.toLocaleString('en-US', { minimumFractionDigits: 2 }) : (activeBroker.customStartingBalance || 15000).toLocaleString('en-US', { minimumFractionDigits: 2 })}
             </span>
           </div>
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800/80">
@@ -250,7 +261,7 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
           <div className="flex items-center gap-2">
             <Tag className="w-4 h-4 text-cyan-400" />
             <span className="font-bold text-slate-200 uppercase tracking-wide">
-              12 Watchlist Assets: Multi-Broker Tickers &amp; Real Live Price Feed
+              15 Watchlist Assets: Multi-Broker Tickers &amp; Real Live Price Feed
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -295,7 +306,7 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
                       <div className="flex items-center gap-1.5">
                         <span className="font-bold text-slate-100">{inst.terminalSymbol}</span>
                         <span className="text-[9px] px-1 rounded bg-slate-800 text-slate-400">
-                          {inst.assetClass === 'FOREX' ? 'FX' : 'COMM'}
+                          {inst.assetClass === 'FOREX' ? 'FX' : inst.assetClass === 'COMMODITY' ? 'COMM' : 'CRYPTO'}
                         </span>
                       </div>
                     </td>
@@ -397,7 +408,20 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
                   const isClosing = closingTicketId === pos.brokerTicketId;
                   return (
                     <tr key={pos.brokerTicketId} className="hover:bg-slate-900/30">
-                      <td className="p-2.5 text-slate-400">{pos.brokerTicketId}</td>
+                      <td className="p-2.5 text-slate-400">
+                        <div className="flex items-center gap-1.5">
+                          <span>{pos.brokerTicketId}</span>
+                          {pos.brokerTicketId.startsWith('CAP-DEMO') || pos.brokerTicketId.startsWith('CAP-LIVE') ? (
+                            <span className="text-[8px] px-1 py-0.2 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                              SANDBOX
+                            </span>
+                          ) : (
+                            <span className="text-[8px] px-1 py-0.2 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                              LIVE BROKER
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="p-2.5 font-bold text-slate-100">{pos.symbol}</td>
                       <td className="p-2.5 text-cyan-300 font-semibold">{getBrokerSymbol(pos.symbol, pos.brokerId)}</td>
                       <td className="p-2.5 font-semibold">

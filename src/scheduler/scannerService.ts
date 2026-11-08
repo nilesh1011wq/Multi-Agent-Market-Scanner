@@ -153,6 +153,14 @@ class ScannerService {
       invalidationLevel: parseFloat(arb.invalidation) || arb.stop_loss,
     };
 
+    // If Auto-Execution is enabled on active broker and gates pass, dispatch order immediately
+    try {
+      const { brokerManager } = await import('../broker/brokerManager');
+      await brokerManager.evaluateAndAutoExecute(arb, snapshot);
+    } catch (brokerErr: any) {
+      console.warn(`[Scanner] Auto-trade dispatch notice for ${symbol}:`, brokerErr.message);
+    }
+
     // If eligible, dispatch alert
     await alertService.evaluateAndDispatch(opp);
 

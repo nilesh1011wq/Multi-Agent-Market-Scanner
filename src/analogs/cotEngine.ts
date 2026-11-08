@@ -20,6 +20,9 @@ const COT_DATABASE: Record<string, { commercialNet: number; nonCommercialNet: nu
   WTI: { commercialNet: -240000, nonCommercialNet: 251000, percentile3Y: 48.0, percentile30Y: 51.0 },
   BRENT: { commercialNet: -185000, nonCommercialNet: 192000, percentile3Y: 52.4, percentile30Y: 53.8 },
   NATGAS: { commercialNet: 68000, nonCommercialNet: -72000, percentile3Y: 14.2, percentile30Y: 11.5 }, // Extreme spec short natgas
+  BTCUSD: { commercialNet: -8400, nonCommercialNet: 8900, percentile3Y: 78.5, percentile30Y: 82.0 },
+  ETHUSD: { commercialNet: -3200, nonCommercialNet: 3450, percentile3Y: 64.2, percentile30Y: 66.8 },
+  SOLUSD: { commercialNet: -1100, nonCommercialNet: 1250, percentile3Y: 71.0, percentile30Y: 73.5 },
 };
 
 export function getCOTData(symbol: string): COTData {

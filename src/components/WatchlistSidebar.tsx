@@ -19,7 +19,7 @@ export const WatchlistSidebar: React.FC<WatchlistSidebarProps> = ({
   regimeMap,
   activeBrokerId = 'CAPITAL_COM',
 }) => {
-  const [filter, setFilter] = useState<'ALL' | 'FOREX' | 'COMMODITY'>('ALL');
+  const [filter, setFilter] = useState<'ALL' | 'FOREX' | 'COMMODITY' | 'CRYPTO'>('ALL');
   const [search, setSearch] = useState('');
 
   const filtered = WATCHLIST.filter((item) => {
@@ -40,18 +40,18 @@ export const WatchlistSidebar: React.FC<WatchlistSidebarProps> = ({
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search 12 Watchlist assets..."
+            placeholder="Search 15 Watchlist assets..."
             className="w-full bg-slate-900/90 border border-slate-800 text-slate-200 placeholder-slate-500 text-xs pl-8 pr-2.5 py-1.5 rounded focus:outline-none focus:border-cyan-500 font-mono"
           />
         </div>
 
         {/* Filter Segmented Control */}
         <div className="flex items-center gap-1 p-0.5 bg-slate-900 rounded border border-slate-800/80">
-          {(['ALL', 'FOREX', 'COMMODITY'] as const).map((cat) => (
+          {(['ALL', 'FOREX', 'COMMODITY', 'CRYPTO'] as const).map((cat) => (
             <button
               key={cat}
               onClick={() => setFilter(cat)}
-              className={`flex-1 py-1 text-[11px] font-mono font-medium rounded transition-colors ${
+              className={`flex-1 py-1 text-[10px] font-mono font-medium rounded transition-colors ${
                 filter === cat
                   ? 'bg-slate-800 text-cyan-300 shadow-sm'
                   : 'text-slate-400 hover:text-slate-200'
@@ -92,7 +92,7 @@ export const WatchlistSidebar: React.FC<WatchlistSidebarProps> = ({
                     {item.symbol}
                   </span>
                   <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-slate-800/80 text-slate-400">
-                    {item.assetClass === 'FOREX' ? 'FX' : 'COMM'}
+                    {item.assetClass === 'FOREX' ? 'FX' : item.assetClass === 'COMMODITY' ? 'COMM' : 'CRYPTO'}
                   </span>
                   {brokerEpic !== item.symbol && (
                     <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-cyan-950/80 border border-cyan-800/50 text-cyan-300 flex items-center gap-0.5" title={`Mapped Broker Epic on ${activeBrokerId}`}>
@@ -121,7 +121,7 @@ export const WatchlistSidebar: React.FC<WatchlistSidebarProps> = ({
 
       {/* Footer Info */}
       <div className="p-2 border-t border-slate-800 text-[10px] font-mono text-slate-500 flex justify-between items-center bg-slate-950/50">
-        <span>12 ASSETS MATCHED</span>
+        <span>15 ASSETS MATCHED</span>
         <span className="text-cyan-400 flex items-center gap-1">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
           LIVE YAHOO FEED

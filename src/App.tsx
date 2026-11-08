@@ -76,8 +76,30 @@ export default function App() {
   const [brokerAuditLogs, setBrokerAuditLogs] = useState<ExecutionAuditLog[]>([]);
   const [isBrokerModalOpen, setIsBrokerModalOpen] = useState(false);
   const [isOrderTicketOpen, setIsOrderTicketOpen] = useState(false);
+  const [manualTicketState, setManualTicketState] = useState<{
+    symbol?: string;
+    direction?: 'BUY' | 'SELL';
+    entryPrice?: number;
+    stopLoss?: number;
+    takeProfit?: number;
+  }>({});
   const [isBrokerLoading, setIsBrokerLoading] = useState(false);
   const [brokerNotification, setBrokerNotification] = useState<string | null>(null);
+
+  // Helper to open manual broker order ticket from anywhere in the terminal
+  const openManualBrokerTicket = (params?: {
+    symbol?: string;
+    direction?: 'BUY' | 'SELL';
+    entryPrice?: number;
+    stopLoss?: number;
+    takeProfit?: number;
+  }) => {
+    if (params?.symbol) {
+      setActiveSymbol(params.symbol);
+    }
+    setManualTicketState(params || {});
+    setIsOrderTicketOpen(true);
+  };
 
   // Prices and regimes for watchlist sidebar
   const [priceMap, setPriceMap] = useState<Record<string, number>>({});
@@ -233,7 +255,7 @@ export default function App() {
     initData();
   }, []);
 
-  // Real-time live quotes polling for all 12 instruments
+  // Real-time live quotes polling for all 15 instruments
   useEffect(() => {
     async function loadQuotes() {
       try {
@@ -261,10 +283,9 @@ export default function App() {
   const refreshBrokerData = async () => {
     setIsBrokerLoading(true);
     try {
-      const [confRes, accRes, posRes, logsRes] = await Promise.all([
+      const [confRes, syncRes, logsRes] = await Promise.all([
         fetch('/api/broker/configs'),
-        fetch('/api/broker/account'),
-        fetch('/api/broker/positions'),
+        fetch('/api/broker/sync-balance', { method: 'POST' }),
         fetch('/api/broker/audit-logs'),
       ]);
 
@@ -274,11 +295,11 @@ export default function App() {
         setActiveBrokerId(confData.activeBrokerId);
       }
 
-      const accData = await accRes.json();
-      if (accData.success) setBrokerAccountSummary(accData.summary);
-
-      const posData = await posRes.json();
-      if (posData.success) setBrokerPositions(posData.positions);
+      const syncData = await syncRes.json();
+      if (syncData.success) {
+        if (syncData.summary) setBrokerAccountSummary(syncData.summary);
+        if (syncData.positions) setBrokerPositions(syncData.positions);
+      }
 
       const logsData = await logsRes.json();
       if (logsData.success) setBrokerAuditLogs(logsData.logs);
@@ -386,7 +407,10 @@ export default function App() {
     });
     const data = await res.json();
     if (data.success) {
-      setBrokerNotification(`Order filled on ${order.brokerId}: ${order.direction} ${order.symbol} (${data.result.message})`);
+      if (data.result && !data.result.success) {
+        throw new Error(data.result.message || 'Broker rejected order.');
+      }
+      setBrokerNotification(`Order filled on ${order.brokerId}: ${order.direction} ${order.symbol} (${data.result?.message || 'Done'})`);
       setTimeout(() => setBrokerNotification(null), 6000);
       await refreshBrokerData();
     } else {
@@ -653,6 +677,7 @@ export default function App() {
         activeBrokerEnvironment={brokerConfigs[activeBrokerId]?.environment || 'DEMO'}
         isAutoExecutionEnabled={brokerConfigs[activeBrokerId]?.isAutoExecutionEnabled ?? true}
         brokerPositionsCount={brokerPositions.length}
+        onOpenManualTicket={() => openManualBrokerTicket()}
       />
 
       {/* Broker Auto-Execution / Alert Notification Banner */}
@@ -673,7 +698,7 @@ export default function App() {
 
       {/* Main Terminal Workspace */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Column: Watchlist of 12 Forex & Commodity Assets (Always accessible) */}
+        {/* Left Column: Watchlist of 15 Forex, Commodity & Crypto Assets (Always accessible) */}
         <WatchlistSidebar
           activeSymbol={activeSymbol}
           onSelectSymbol={setActiveSymbol}
@@ -723,6 +748,14 @@ export default function App() {
                 isRunning={isDebateRunning}
                 onRunDebate={handleRunFullDebate}
                 durationMs={debateDurationMs}
+                onOpenManualTicket={(dir, sl, tp) =>
+                  openManualBrokerTicket({
+                    symbol: activeSymbol,
+                    direction: dir,
+                    stopLoss: sl,
+                    takeProfit: tp,
+                  })
+                }
               />
 
               {/* Agent 1 Trend & Momentum Panel */}
@@ -750,6 +783,15 @@ export default function App() {
                 onRefreshScan={handleRescanWatchlist}
                 onSelectOpportunity={handleSelectOpportunity}
                 onOpenPaperTrade={handleOpenPaperTrade}
+                onOpenManualTrade={(opp) =>
+                  openManualBrokerTicket({
+                    symbol: opp.symbol,
+                    direction: opp.direction === 'SELL' ? 'SELL' : 'BUY',
+                    entryPrice: opp.entryZone?.[0],
+                    stopLoss: opp.stopLoss,
+                    takeProfit: opp.takeProfits?.[0],
+                  })
+                }
                 activeSymbol={activeSymbol}
               />
             </div>
@@ -990,14 +1032,22 @@ export default function App() {
         isOpen={isOrderTicketOpen}
         onClose={() => setIsOrderTicketOpen(false)}
         activeBroker={brokerConfigs[activeBrokerId] || brokerConfigs.CAPITAL_COM}
-        defaultSymbol={activeSymbol}
-        defaultDirection={debateTranscript?.arbiter?.final_recommendation === 'SELL' ? 'SELL' : 'BUY'}
-        defaultEntryPrice={candles.length > 0 ? candles[candles.length - 1].close : 1.085}
+        defaultSymbol={manualTicketState.symbol || activeSymbol}
+        defaultDirection={
+          manualTicketState.direction ||
+          (debateTranscript?.arbiter?.final_recommendation === 'SELL' ? 'SELL' : 'BUY')
+        }
+        defaultEntryPrice={
+          manualTicketState.entryPrice ||
+          (candles.length > 0 ? candles[candles.length - 1].close : 1.085)
+        }
         defaultStopLoss={
+          manualTicketState.stopLoss ||
           debateTranscript?.arbiter?.stop_loss ||
           (candles.length > 0 ? candles[candles.length - 1].close * 0.995 : 1.08)
         }
         defaultTakeProfit={
+          manualTicketState.takeProfit ||
           debateTranscript?.arbiter?.take_profit?.[0] ||
           (candles.length > 0 ? candles[candles.length - 1].close * 1.01 : 1.095)
         }

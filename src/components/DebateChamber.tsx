@@ -28,6 +28,7 @@ interface DebateChamberProps {
   isRunning: boolean;
   onRunDebate: () => void;
   durationMs?: number;
+  onOpenManualTicket?: (direction?: 'BUY' | 'SELL', stopLoss?: number, takeProfit?: number) => void;
 }
 
 export const DebateChamber: React.FC<DebateChamberProps> = ({
@@ -35,6 +36,7 @@ export const DebateChamber: React.FC<DebateChamberProps> = ({
   isRunning,
   onRunDebate,
   durationMs,
+  onOpenManualTicket,
 }) => {
   const [activeTab, setActiveTab] = useState<'ARBITER' | 'CROSS_EXAM' | 'ROUND_1' | 'RISK_GATE' | 'TRANSCRIPT'>('ARBITER');
   const [selectedAgentCard, setSelectedAgentCard] = useState<string>('Trend & Momentum');
@@ -80,16 +82,33 @@ export const DebateChamber: React.FC<DebateChamberProps> = ({
             {/* 1. Final Recommendation */}
             <div className="space-y-0.5">
               <div className="text-[10px] text-slate-500 font-bold uppercase">FINAL RECOMMENDATION</div>
-              <div
-                className={`text-lg font-black tracking-tight px-2.5 py-1 rounded inline-block text-center ${
-                  arbiter.final_recommendation === 'BUY'
-                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                    : arbiter.final_recommendation === 'SELL'
-                    ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
-                    : 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                }`}
-              >
-                {arbiter.final_recommendation}
+              <div className="flex items-center gap-2">
+                <div
+                  className={`text-lg font-black tracking-tight px-2.5 py-1 rounded inline-block text-center ${
+                    arbiter.final_recommendation === 'BUY'
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                      : arbiter.final_recommendation === 'SELL'
+                      ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                      : 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                  }`}
+                >
+                  {arbiter.final_recommendation}
+                </div>
+                {onOpenManualTicket && (
+                  <button
+                    onClick={() =>
+                      onOpenManualTicket(
+                        arbiter.final_recommendation === 'SELL' ? 'SELL' : 'BUY',
+                        arbiter.stop_loss,
+                        arbiter.take_profit?.[0]
+                      )
+                    }
+                    className="px-2.5 py-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded text-[11px] transition-colors flex items-center gap-1 cursor-pointer shadow-sm shadow-cyan-500/20"
+                    title="Open Manual Order Ticket with Arbiter SL & TP"
+                  >
+                    <span>MANUAL TRADE</span>
+                  </button>
+                )}
               </div>
             </div>
 

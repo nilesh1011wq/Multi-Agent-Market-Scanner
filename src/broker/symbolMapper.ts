@@ -12,7 +12,7 @@ export interface BrokerInstrumentDetails {
 export interface InstrumentDefinition {
   terminalSymbol: string;
   name: string;
-  assetClass: 'FOREX' | 'COMMODITY';
+  assetClass: 'FOREX' | 'COMMODITY' | 'CRYPTO';
   yahooTicker: string;
   digits: number;
   pipSize: number;
@@ -21,7 +21,7 @@ export interface InstrumentDefinition {
 }
 
 /**
- * Master mapping specification for all 12 instruments across Terminal,
+ * Master mapping specification for all 15 instruments (Forex, Commodities, Cryptos) across Terminal,
  * Capital.com, MetaTrader 5 (MT5/MetaAPI), and IG Markets (REST deal gateway).
  */
 export const ALL_INSTRUMENTS: InstrumentDefinition[] = [
@@ -465,6 +465,117 @@ export const ALL_INSTRUMENTS: InstrumentDefinition[] = [
         step: 1,
         multiplier: 1000,
         description: 'Natural Gas Henry Hub Contract (IG Epic: CC.D.NG.USS.IP)',
+      },
+    },
+  },
+
+  // 13. BTCUSD (Bitcoin)
+  {
+    terminalSymbol: 'BTCUSD',
+    name: 'Bitcoin / US Dollar',
+    assetClass: 'CRYPTO',
+    yahooTicker: 'BTC-USD',
+    digits: 2,
+    pipSize: 1.0,
+    minSpread: 12.0,
+    brokers: {
+      CAPITAL_COM: {
+        epic: 'BTCUSD',
+        aliases: ['BTCUSD', 'BITCOIN', 'BTC/USD', 'BTC'],
+        minLot: 0.01,
+        step: 0.01,
+        multiplier: 1,
+        description: 'Bitcoin USD CFD (Capital.com epic: BTCUSD)',
+      },
+      MT5: {
+        epic: 'BTCUSD',
+        aliases: ['BTCUSD', 'BTCUSDm', 'BTCUSD.pro', 'BTCUSDT', 'BITCOIN', 'BTC'],
+        minLot: 0.01,
+        step: 0.01,
+        multiplier: 1,
+        description: 'Bitcoin vs US Dollar Contract',
+      },
+      IG: {
+        epic: 'CS.D.BITCOIN.CFD.IP',
+        aliases: ['CS.D.BITCOIN.CFD.IP', 'BTCUSD', 'BITCOIN', 'CS.D.BITCOIN.MINI.IP', 'BTC'],
+        minLot: 0.1,
+        step: 0.1,
+        multiplier: 1,
+        description: 'Bitcoin Crypto CFD (IG Epic: CS.D.BITCOIN.CFD.IP)',
+      },
+    },
+  },
+
+  // 14. ETHUSD (Ethereum)
+  {
+    terminalSymbol: 'ETHUSD',
+    name: 'Ethereum / US Dollar',
+    assetClass: 'CRYPTO',
+    yahooTicker: 'ETH-USD',
+    digits: 2,
+    pipSize: 0.1,
+    minSpread: 1.2,
+    brokers: {
+      CAPITAL_COM: {
+        epic: 'ETHUSD',
+        aliases: ['ETHUSD', 'ETHEREUM', 'ETH/USD', 'ETH'],
+        minLot: 0.1,
+        step: 0.1,
+        multiplier: 1,
+        description: 'Ethereum USD CFD (Capital.com epic: ETHUSD)',
+      },
+      MT5: {
+        epic: 'ETHUSD',
+        aliases: ['ETHUSD', 'ETHUSDm', 'ETHUSD.pro', 'ETHUSDT', 'ETHEREUM', 'ETH'],
+        minLot: 0.01,
+        step: 0.01,
+        multiplier: 1,
+        description: 'Ethereum vs US Dollar Contract',
+      },
+      IG: {
+        epic: 'CS.D.ETHUSD.CFD.IP',
+        aliases: ['CS.D.ETHUSD.CFD.IP', 'ETHUSD', 'ETHEREUM', 'CS.D.ETHUSD.MINI.IP', 'ETH'],
+        minLot: 0.5,
+        step: 0.1,
+        multiplier: 1,
+        description: 'Ethereum Crypto CFD (IG Epic: CS.D.ETHUSD.CFD.IP)',
+      },
+    },
+  },
+
+  // 15. SOLUSD (Solana)
+  {
+    terminalSymbol: 'SOLUSD',
+    name: 'Solana / US Dollar',
+    assetClass: 'CRYPTO',
+    yahooTicker: 'SOL-USD',
+    digits: 2,
+    pipSize: 0.01,
+    minSpread: 0.15,
+    brokers: {
+      CAPITAL_COM: {
+        epic: 'SOLUSD',
+        aliases: ['SOLUSD', 'SOLANA', 'SOL/USD', 'SOL'],
+        minLot: 1,
+        step: 1,
+        multiplier: 1,
+        description: 'Solana USD CFD (Capital.com epic: SOLUSD)',
+      },
+      MT5: {
+        epic: 'SOLUSD',
+        aliases: ['SOLUSD', 'SOLUSDm', 'SOLUSD.pro', 'SOLUSDT', 'SOLANA', 'SOL'],
+        minLot: 0.1,
+        step: 0.1,
+        multiplier: 1,
+        description: 'Solana vs US Dollar Contract',
+      },
+      IG: {
+        epic: 'CS.D.SOLUSD.CFD.IP',
+        aliases: ['CS.D.SOLUSD.CFD.IP', 'SOLUSD', 'SOLANA', 'SOL'],
+        minLot: 1,
+        step: 0.5,
+        multiplier: 1,
+        description: 'Solana Crypto CFD (IG Epic: CS.D.SOLUSD.CFD.IP)',
       },
     },
   },
