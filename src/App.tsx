@@ -28,6 +28,7 @@ import {
   StandardizedOrderRequest,
 } from './types/broker';
 import { ExecutionAuditLog } from './broker/brokerManager';
+import { safeFetchJson } from './utils/apiClient';
 import { Calendar, ShieldAlert, Cpu, BarChart3, Clock, AlertTriangle, Layers, Flame, Bell, Wallet, Globe } from 'lucide-react';
 
 export default function App() {
@@ -284,25 +285,24 @@ export default function App() {
     setIsBrokerLoading(true);
     try {
       const [confRes, syncRes, logsRes] = await Promise.all([
-        fetch('/api/broker/configs'),
-        fetch('/api/broker/sync-balance', { method: 'POST' }),
-        fetch('/api/broker/audit-logs'),
+        safeFetchJson('/api/broker/configs'),
+        safeFetchJson('/api/broker/sync-balance', { method: 'POST' }),
+        safeFetchJson('/api/broker/audit-logs'),
       ]);
 
-      const confData = await confRes.json();
-      if (confData.success) {
-        setBrokerConfigs(confData.configs);
-        setActiveBrokerId(confData.activeBrokerId);
+      if (confRes.success && confRes.data) {
+        setBrokerConfigs(confRes.data.configs);
+        setActiveBrokerId(confRes.data.activeBrokerId);
       }
 
-      const syncData = await syncRes.json();
-      if (syncData.success) {
-        if (syncData.summary) setBrokerAccountSummary(syncData.summary);
-        if (syncData.positions) setBrokerPositions(syncData.positions);
+      if (syncRes.success && syncRes.data) {
+        if (syncRes.data.summary) setBrokerAccountSummary(syncRes.data.summary);
+        if (syncRes.data.positions) setBrokerPositions(syncRes.data.positions);
       }
 
-      const logsData = await logsRes.json();
-      if (logsData.success) setBrokerAuditLogs(logsData.logs);
+      if (logsRes.success && logsRes.data?.logs) {
+        setBrokerAuditLogs(logsRes.data.logs);
+      }
     } catch (err) {
       console.error('Failed to sync broker data:', err);
     } finally {
@@ -312,16 +312,15 @@ export default function App() {
 
   const handleSaveBrokerConfig = async (brokerId: BrokerId, updated: Partial<BrokerConfig>) => {
     try {
-      const res = await fetch('/api/broker/config', {
+      const res = await safeFetchJson('/api/broker/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ brokerId, config: updated }),
       });
-      const data = await res.json();
-      if (data.success) {
+      if (res.success && res.data?.config) {
         setBrokerConfigs((prev) => ({
           ...prev,
-          [brokerId]: { ...prev[brokerId], ...data.config },
+          [brokerId]: { ...prev[brokerId], ...res.data.config },
         }));
       }
     } catch (err) {
@@ -330,37 +329,34 @@ export default function App() {
   };
 
   const handleConnectBroker = async (brokerId: BrokerId) => {
-    const res = await fetch('/api/broker/connect', {
+    const res = await safeFetchJson('/api/broker/connect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ brokerId }),
     });
-    const data = await res.json();
     await refreshBrokerData();
-    return data;
+    return res.data || { success: res.success, latencyMs: 0, message: res.error || 'Connection failed' };
   };
 
   const handleSelectActiveBroker = async (brokerId: BrokerId) => {
-    const res = await fetch('/api/broker/select-active', {
+    const res = await safeFetchJson('/api/broker/select-active', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ brokerId }),
     });
-    const data = await res.json();
-    if (data.success) {
+    if (res.success && res.data?.success) {
       setActiveBrokerId(brokerId);
       await refreshBrokerData();
     }
   };
 
   const handleToggleAutoExecution = async (enabled: boolean) => {
-    const res = await fetch('/api/broker/toggle-auto-execution', {
+    const res = await safeFetchJson('/api/broker/toggle-auto-execution', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),
     });
-    const data = await res.json();
-    if (data.success) {
+    if (res.success && res.data?.success) {
       setBrokerConfigs((prev) => ({
         ...prev,
         [activeBrokerId]: {
@@ -373,13 +369,12 @@ export default function App() {
 
   const handleCloseBrokerPosition = async (ticketId: string) => {
     try {
-      const res = await fetch('/api/broker/close', {
+      const res = await safeFetchJson('/api/broker/close', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ brokerId: activeBrokerId, ticketId }),
       });
-      const data = await res.json();
-      if (data.success) {
+      if (res.success && res.data?.success) {
         await refreshBrokerData();
       }
     } catch (err) {
@@ -389,9 +384,8 @@ export default function App() {
 
   const handleFlattenAllBroker = async () => {
     try {
-      const res = await fetch('/api/broker/flatten-all', { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
+      const res = await safeFetchJson('/api/broker/flatten-all', { method: 'POST' });
+      if (res.success && res.data?.success) {
         await refreshBrokerData();
       }
     } catch (err) {
@@ -400,21 +394,20 @@ export default function App() {
   };
 
   const handleSubmitBrokerOrder = async (order: StandardizedOrderRequest) => {
-    const res = await fetch('/api/broker/order', {
+    const res = await safeFetchJson('/api/broker/order', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ order }),
     });
-    const data = await res.json();
-    if (data.success) {
-      if (data.result && !data.result.success) {
-        throw new Error(data.result.message || 'Broker rejected order.');
+    if (res.success && res.data?.success) {
+      if (res.data.result && !res.data.result.success) {
+        throw new Error(res.data.result.message || 'Broker rejected order.');
       }
-      setBrokerNotification(`Order filled on ${order.brokerId}: ${order.direction} ${order.symbol} (${data.result?.message || 'Done'})`);
+      setBrokerNotification(`Order filled on ${order.brokerId}: ${order.direction} ${order.symbol} (${res.data.result?.message || 'Done'})`);
       setTimeout(() => setBrokerNotification(null), 6000);
       await refreshBrokerData();
     } else {
-      throw new Error(data.error || 'Failed to place order');
+      throw new Error(res.error || res.data?.error || 'Failed to place order');
     }
   };
 

@@ -1,0 +1,3 @@
+# Netlify API proxy rule to route /api/* requests to the full-stack backend
+/api/*  https://ais-pre-g3ruhljtf6nyyvw7uadmsk-555271435241.europe-west3.run.app/api/:splat  200!
+/*      /index.html                                                                                 200

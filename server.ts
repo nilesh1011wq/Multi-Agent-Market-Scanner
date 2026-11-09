@@ -24,7 +24,19 @@ async function startServer() {
 
   app.use(express.json());
 
-  // 1. Watchlist and symbol metadata
+  // Enable CORS for hosted frontends (e.g. Netlify, Vercel, Cloud Run)
+  app.use((_req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header(
+      'Access-Control-Allow-Headers',
+      'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-CAP-API-KEY, CST, X-SECURITY-TOKEN'
+    );
+    if (_req.method === 'OPTIONS') {
+      return res.sendStatus(200);
+    }
+    next();
+  });
   app.get('/api/symbols', (_req, res) => {
     res.json({ success: true, watchlist: WATCHLIST });
   });

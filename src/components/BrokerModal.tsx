@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BrokerConfig, BrokerId, BrokerEnvironment } from '../types/broker';
+import { safeFetchJson } from '../utils/apiClient';
 import {
   X,
   ShieldCheck,
@@ -102,20 +103,19 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
       const updates = formData[selectedTab] || {};
       await onSaveConfig(selectedTab, updates);
 
-      const res = await fetch('/api/broker/sync-balance', { method: 'POST' });
-      const data = await res.json();
-      if (data.success && data.summary) {
-        const bal = data.summary.balance;
-        const source = data.summary.isRealBrokerAccount ? 'Live Broker Account' : 'Calibrated Sandbox';
+      const res = await safeFetchJson('/api/broker/sync-balance', { method: 'POST' });
+      if (res.success && res.data?.summary) {
+        const bal = res.data.summary.balance;
+        const source = res.data.summary.isRealBrokerAccount ? 'Live Broker Account' : 'Calibrated Sandbox';
         setSyncBalanceResult({
           success: true,
-          message: `Successfully fetched balance: $${bal.toLocaleString('en-US', { minimumFractionDigits: 2 })} ${data.summary.currency} (${source}).`,
+          message: `Successfully fetched balance: $${bal.toLocaleString('en-US', { minimumFractionDigits: 2 })} ${res.data.summary.currency} (${source}).`,
         });
         handleFieldChange('customStartingBalance', bal);
       } else {
         setSyncBalanceResult({
           success: false,
-          message: data.error || 'Failed to sync balance from broker.',
+          message: res.error || res.data?.error || 'Failed to sync balance from broker.',
         });
       }
     } catch (err: any) {
