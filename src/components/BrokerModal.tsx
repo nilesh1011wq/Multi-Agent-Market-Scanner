@@ -57,11 +57,30 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
   // Keep form data synchronized with stored broker configurations so saved credentials are never wiped
   useEffect(() => {
     if (isOpen && configs) {
-      setFormData({
+      const baseFormData = {
         CAPITAL_COM: { ...configs.CAPITAL_COM },
         MT5: { ...configs.MT5 },
         IG: { ...configs.IG },
-      });
+      };
+
+      try {
+        const localBackup = JSON.parse(localStorage.getItem('quant_capitalcom_creds') || '{}');
+        if (localBackup && (!configs.CAPITAL_COM.apiKey || configs.CAPITAL_COM.apiKey.length < 5)) {
+          if (localBackup.apiKey && !baseFormData.CAPITAL_COM.apiKey) {
+            baseFormData.CAPITAL_COM.apiKey = localBackup.apiKey;
+          }
+          if (localBackup.apiSecret && !baseFormData.CAPITAL_COM.apiSecret) {
+            baseFormData.CAPITAL_COM.apiSecret = localBackup.apiSecret;
+          }
+          if (localBackup.identifier && !baseFormData.CAPITAL_COM.identifier) {
+            baseFormData.CAPITAL_COM.identifier = localBackup.identifier;
+          }
+        }
+      } catch {
+        // Non-blocking localStorage read
+      }
+
+      setFormData(baseFormData);
     }
   }, [isOpen, configs]);
 
@@ -87,6 +106,21 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
       // 1. Save config first
       const updates = formData[selectedTab] || {};
       await onSaveConfig(selectedTab, updates);
+
+      // Save client backup in localStorage for resilient persistence across Render restarts
+      if (selectedTab === 'CAPITAL_COM') {
+        try {
+          const prevBackup = JSON.parse(localStorage.getItem('quant_capitalcom_creds') || '{}');
+          const backupData: any = { ...prevBackup };
+          if (updates.identifier) backupData.identifier = updates.identifier;
+          if (updates.apiKey && !updates.apiKey.includes('••••')) backupData.apiKey = updates.apiKey;
+          if (updates.apiSecret && !updates.apiSecret.includes('••••')) backupData.apiSecret = updates.apiSecret;
+          if (updates.environment) backupData.environment = updates.environment;
+          localStorage.setItem('quant_capitalcom_creds', JSON.stringify(backupData));
+        } catch {
+          // Non-blocking localStorage save
+        }
+      }
 
       // 2. Test connection
       const res = await onConnectBroker(selectedTab);
@@ -352,8 +386,8 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <label className="text-[11px] text-slate-400">
-                        Account Password / Session Secret:
+                      <label className="text-[11px] text-amber-300 font-semibold flex items-center gap-1">
+                        API Key Custom Password:
                       </label>
                       {currentBroker.hasSavedApiSecret && (
                         <span className="text-[9px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">
@@ -363,11 +397,14 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
                     </div>
                     <input
                       type="password"
-                      placeholder={currentBroker.hasSavedApiSecret ? '•••••••• (Saved - type to change)' : 'Enter Capital.com login password'}
+                      placeholder={currentBroker.hasSavedApiSecret ? '•••••••• (Saved - type to change)' : 'Custom password set during API key creation'}
                       value={activeForm.apiSecret ?? ''}
                       onChange={(e) => handleFieldChange('apiSecret', e.target.value)}
                       className="w-full bg-slate-900 border border-slate-800 px-3 py-2 rounded text-slate-200 focus:outline-none focus:border-cyan-500/50"
                     />
+                    <span className="text-[10px] text-amber-400/90 mt-1 block leading-tight font-sans">
+                      ⚠️ <strong>Custom Password</strong> chosen when clicking &quot;Generate new key&quot; in Capital.com Settings &gt; API Integrations (NOT account login password).
+                    </span>
                   </div>
                 </div>
 

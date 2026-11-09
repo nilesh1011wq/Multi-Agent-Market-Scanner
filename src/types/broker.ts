@@ -137,6 +137,8 @@ export interface BrokerAccountSummary {
   isRealBrokerAccount?: boolean;
   accountSource?: 'LIVE_BROKER_API' | 'CALIBRATED_SANDBOX';
   brokerAccountId?: string;
+  lastErrorMessage?: string;
+  connectionStatus?: BrokerConnectionStatus;
 }
 
 export interface IBrokerAdapter {

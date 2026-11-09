@@ -234,8 +234,21 @@ class BrokerManager {
     const maxDailyDd = activeConf.maxDailyDrawdownPct || 3.0;
     const isCircuitBreakerActive = dailyDrawdownPct <= -Math.abs(maxDailyDd);
 
+    const effectiveStatus = rawSummary.isRealBrokerAccount
+      ? 'CONNECTED'
+      : (activeConf.status === 'ERROR' || rawSummary.connectionStatus === 'ERROR')
+      ? 'ERROR'
+      : activeConf.status;
+
+    const effectiveError =
+      rawSummary.lastErrorMessage ||
+      activeConf.errorMessage ||
+      (typeof (adapter as any).getLastErrorMessage === 'function' ? (adapter as any).getLastErrorMessage() : undefined);
+
     return {
       ...rawSummary,
+      connectionStatus: effectiveStatus,
+      lastErrorMessage: effectiveError,
       openPositionsCount: openPositions.length,
       realizedPnL: Number(realizedPnL.toFixed(2)),
       realizedPnLR: Number(realizedPnLR.toFixed(2)),

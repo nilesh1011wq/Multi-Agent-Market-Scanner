@@ -630,19 +630,56 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
           </div>
         )}
 
+        {/* Connection Failure / Diagnostic Alert Banner */}
+        {(accountSummary?.connectionStatus === 'ERROR' || accountSummary?.lastErrorMessage || activeBroker.status === 'ERROR') && (
+          <div className="p-3 bg-rose-950/50 border-b border-rose-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold text-rose-300">Broker Session Sync Issue:</span>{' '}
+                <span className="text-slate-200">
+                  {accountSummary?.lastErrorMessage || activeBroker.errorMessage || 'Capital.com API session could not be established.'}
+                </span>
+                <p className="text-[11px] text-rose-300/80 mt-0.5 font-sans">
+                  Please verify your <strong>API Key Custom Password</strong> (set during key generation in Capital.com Settings &gt; API Integrations, NOT your account login password).
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={onOpenBrokerSettings}
+              className="px-3 py-1.5 bg-rose-500 hover:bg-rose-400 text-slate-950 font-bold rounded text-xs transition-colors shrink-0 cursor-pointer shadow-sm flex items-center gap-1.5"
+            >
+              <Zap className="w-3.5 h-3.5 fill-current" />
+              <span>CONFIGURE / RE-LINK</span>
+            </button>
+          </div>
+        )}
+
         {positions.length === 0 ? (
           <div className="p-8 text-center text-slate-500 space-y-3">
             {!accountSummary?.isRealBrokerAccount ? (
               <div className="max-w-md mx-auto space-y-2">
-                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20 text-xs font-bold">
+                <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${
+                  accountSummary?.connectionStatus === 'ERROR' || accountSummary?.lastErrorMessage
+                    ? 'bg-rose-500/10 text-rose-300 border border-rose-500/20'
+                    : 'bg-amber-500/10 text-amber-300 border border-amber-500/20'
+                }`}>
                   <AlertTriangle className="w-3.5 h-3.5" />
-                  <span>LOCAL SANDBOX MODE ACTIVE</span>
+                  <span>
+                    {accountSummary?.connectionStatus === 'ERROR' || accountSummary?.lastErrorMessage
+                      ? 'CAPITAL.COM SYNC FAILED — RUNNING IN LOCAL SANDBOX'
+                      : 'LOCAL SANDBOX MODE ACTIVE'}
+                  </span>
                 </div>
                 <p className="font-semibold text-slate-300 text-sm">
-                  No open simulated positions in sandbox
+                  {accountSummary?.connectionStatus === 'ERROR' || accountSummary?.lastErrorMessage
+                    ? 'Live Capital.com positions cannot be synced'
+                    : 'No open simulated positions in sandbox'}
                 </p>
                 <p className="text-[11px] text-slate-400 leading-relaxed font-sans">
-                  The terminal is currently running in local simulation mode. Trades you opened directly on your Capital.com app or web account live in Capital.com's cloud and require your API Key and email to sync.
+                  {accountSummary?.lastErrorMessage
+                    ? accountSummary.lastErrorMessage
+                    : "The terminal is currently running in local simulation mode. Trades you opened directly on your Capital.com app or web account live in Capital.com's cloud and require your API Key and email to sync."}
                 </p>
                 <div className="pt-2 flex items-center justify-center gap-3">
                   <button

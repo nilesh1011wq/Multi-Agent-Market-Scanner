@@ -42,6 +42,11 @@ export class CapitalComAdapter implements IBrokerAdapter {
     }
   > = new Map();
   private simulatedBalance = 15000;
+  private lastErrorMessage?: string;
+
+  public getLastErrorMessage(): string | undefined {
+    return this.lastErrorMessage;
+  }
 
 
   private getBaseUrl(): string {
@@ -122,9 +127,16 @@ export class CapitalComAdapter implements IBrokerAdapter {
     if (!hasValidCreds) {
       this.cstToken = null;
       this.xSecurityToken = null;
+      const missing: string[] = [];
+      if (!apiKey || apiKey.length < 5) missing.push('API Key');
+      if (!identifier || identifier.length < 3) missing.push('Account Email / Identifier');
+      if (!apiSecret || apiSecret.length < 3) missing.push('API Key Custom Password');
+      if (apiKey || identifier || apiSecret) {
+        this.lastErrorMessage = `Incomplete Capital.com credentials: missing ${missing.join(', ')}.`;
+      }
       return {
         connected: false,
-        message: 'No Capital.com credentials configured. Operating in Calibrated Sandbox.',
+        message: this.lastErrorMessage || 'No Capital.com credentials configured. Operating in Calibrated Sandbox.',
       };
     }
 
@@ -153,6 +165,7 @@ export class CapitalComAdapter implements IBrokerAdapter {
         body: JSON.stringify({
           identifier,
           password: apiSecret,
+          encryptedPassword: false,
         }),
       });
 
@@ -160,6 +173,7 @@ export class CapitalComAdapter implements IBrokerAdapter {
         this.cstToken = res.headers.get('CST') || res.headers.get('cst');
         this.xSecurityToken = res.headers.get('X-SECURITY-TOKEN') || res.headers.get('x-security-token');
         this.sessionCreatedAt = Date.now();
+        this.lastErrorMessage = undefined;
 
         const data = await res.json().catch(() => ({}));
         if (data.accountInfo) {
@@ -178,17 +192,23 @@ export class CapitalComAdapter implements IBrokerAdapter {
         const errCode = errData.errorCode || errData.message || `HTTP ${res.status}`;
         this.cstToken = null;
         this.xSecurityToken = null;
+        let hint = '';
+        if (String(errCode).includes('invalid.credentials') || String(errCode).includes('password')) {
+          hint = ' Verify you are entering the Custom Password chosen during API key generation (in Settings > API integrations), NOT your main account login password.';
+        }
+        this.lastErrorMessage = `Capital.com rejected login: ${errCode}.${hint}`;
         return {
           connected: false,
-          message: `Capital.com rejected login: ${errCode}. Check your email, password, and ${environment} API key.`,
+          message: this.lastErrorMessage,
         };
       }
     } catch (err: any) {
       this.cstToken = null;
       this.xSecurityToken = null;
+      this.lastErrorMessage = `Capital.com connection error: ${err.message}`;
       return {
         connected: false,
-        message: `Capital.com connection error: ${err.message}`,
+        message: this.lastErrorMessage,
       };
     }
   }
@@ -303,6 +323,8 @@ export class CapitalComAdapter implements IBrokerAdapter {
               isRealBrokerAccount: true,
               accountSource: 'LIVE_BROKER_API',
               brokerAccountId: acc.accountId || this.liveAccountId || undefined,
+              connectionStatus: 'CONNECTED',
+              lastErrorMessage: undefined,
             };
           }
         }
@@ -336,6 +358,8 @@ export class CapitalComAdapter implements IBrokerAdapter {
           isRealBrokerAccount: true,
           accountSource: 'LIVE_BROKER_API',
           brokerAccountId: this.liveAccountId || undefined,
+          connectionStatus: 'CONNECTED',
+          lastErrorMessage: undefined,
         };
       }
     }
@@ -371,6 +395,11 @@ export class CapitalComAdapter implements IBrokerAdapter {
     const equity = Math.round((currentBal + upl) * 100) / 100;
     const marginFree = Math.max(0, Math.round((equity - marginUsed) * 100) / 100);
 
+    const hasCredsConfigured = Boolean(
+      (this.currentConfig?.apiKey || process.env.CAPITAL_COM_API_KEY) &&
+      (this.currentConfig?.identifier || process.env.CAPITAL_COM_IDENTIFIER)
+    );
+
     return {
       brokerId: 'CAPITAL_COM',
       brokerName: 'Capital.com',
@@ -383,10 +412,12 @@ export class CapitalComAdapter implements IBrokerAdapter {
       marginLevelPct: marginUsed > 0 ? Math.round(((equity / marginUsed) * 100) * 10) / 10 : 999,
       unrealizedPnL: Math.round(upl * 100) / 100,
       openPositionsCount: this.simulatedPositions.length,
-      isConnected: true,
+      isConnected: !hasCredsConfigured && !this.lastErrorMessage,
       lastSyncedAt: Date.now(),
       isRealBrokerAccount: false,
       accountSource: 'CALIBRATED_SANDBOX',
+      connectionStatus: hasCredsConfigured || this.lastErrorMessage ? 'ERROR' : 'DISCONNECTED',
+      lastErrorMessage: this.lastErrorMessage,
     };
   }
 
@@ -591,9 +622,16 @@ export class CapitalComAdapter implements IBrokerAdapter {
 
             return livePositions;
           }
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          this.lastErrorMessage = `Capital.com positions fetch error: HTTP ${res.status} (${errData.errorCode || errData.message || 'unknown'})`;
+          if (res.status === 401 || res.status === 403) {
+            this.cstToken = null;
+            this.xSecurityToken = null;
+          }
         }
-      } catch (err) {
-        // Fall back to simulated positions
+      } catch (err: any) {
+        this.lastErrorMessage = `Capital.com positions network error: ${err.message}`;
       }
     }
 
