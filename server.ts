@@ -582,11 +582,56 @@ async function startServer() {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   }
-
   app.listen(port, () => {
     console.log(`[Quant Market Scanner] Server listening on port ${port}`);
+
+    // ==========================================
+    // 24/7 AUTONOMOUS BACKGROUND ENGINE
+    // ==========================================
+    console.log('[Quant Market Scanner] Starting 24/7 Autonomous Scanner & Market Engine...');
+
+    // 1. Autonomous 15-Minute Market Scanner Loop
+    const SCAN_INTERVAL_MS = 15 * 60 * 1000;
+    setInterval(async () => {
+      try {
+        console.log(`[24/7 Scanner] Running scheduled scan across all 15 instruments at ${new Date().toISOString()}`);
+        const { scannerService } = await import('./src/scheduler/scannerService');
+        await scannerService.scanAll('H1');
+        console.log('[24/7 Scanner] Scheduled scan completed successfully.');
+      } catch (err: any) {
+        console.error('[24/7 Scanner] Error during autonomous background scan:', err.message);
+      }
+    }, SCAN_INTERVAL_MS);
+
+    // 2. Autonomous Paper Trading & Price Tick Simulator Loop (every 30 seconds)
+    const TICK_INTERVAL_MS = 30 * 1000;
+    setInterval(async () => {
+      try {
+        const { paperTrader } = await import('./src/backtest/paperTrader');
+        const active = paperTrader.getOpenPositions();
+        if (active.length > 0) {
+          const res = await paperTrader.simulateMarketTick();
+          if (res.resolved.length > 0) {
+            console.log(`[24/7 Paper Trader] Resolved ${res.resolved.length} position(s):`, res.resolved.map(p => `${p.symbol} ${p.status} (${p.realizedPnLR}R)`));
+          }
+        }
+      } catch (err: any) {
+        // Silent catch for background tick drift
+      }
+    }, TICK_INTERVAL_MS);
+
+    // Run an initial scan 10 seconds after boot
+    setTimeout(async () => {
+      try {
+        console.log('[24/7 Scanner] Executing initial boot scan...');
+        const { scannerService } = await import('./src/scheduler/scannerService');
+        await scannerService.scanAll('H1');
+        console.log('[24/7 Scanner] Initial boot scan completed.');
+      } catch (err: any) {
+        console.warn('[24/7 Scanner] Initial boot scan notice:', err.message);
+      }
+    }, 10000);
   });
-}
 
 startServer().catch((err) => {
   console.error('[Quant Market Scanner] Failed to start server:', err);
