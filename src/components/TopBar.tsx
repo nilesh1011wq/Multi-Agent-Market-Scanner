@@ -34,6 +34,7 @@ interface TopBarProps {
   alertsCount?: number;
   paperEquity?: number;
   brokerEquity?: number;
+  isRealBrokerAccount?: boolean;
   engineMode?: 'AI_GEMINI' | 'QUANT_DETERMINISTIC';
   engineMessage?: string;
   activeBrokerName?: string;
@@ -59,6 +60,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   alertsCount = 1,
   paperEquity = 10000,
   brokerEquity,
+  isRealBrokerAccount = false,
   engineMode = 'QUANT_DETERMINISTIC',
   engineMessage,
   activeBrokerName = 'Capital.com',
@@ -242,13 +244,13 @@ export const TopBar: React.FC<TopBarProps> = ({
           <Globe className="w-3.5 h-3.5 text-cyan-400" />
           <span className="font-bold">{activeBrokerName}</span>
           <span
-            className={`text-[9px] px-1 py-0.2 rounded font-bold ${
+            className={`text-[9px] px-1.5 py-0.2 rounded font-bold ${
               activeBrokerEnvironment === 'LIVE'
                 ? 'bg-rose-500/20 text-rose-300'
                 : 'bg-amber-500/20 text-amber-300'
             }`}
           >
-            {activeBrokerEnvironment}
+            {activeBrokerEnvironment} {isRealBrokerAccount ? '· LIVE' : '· SANDBOX'}
           </span>
           {isAutoExecutionEnabled && (
             <span className="text-[9px] text-emerald-400 font-bold hidden sm:inline">⚡AUTO</span>

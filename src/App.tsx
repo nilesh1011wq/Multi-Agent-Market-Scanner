@@ -714,6 +714,7 @@ export default function App() {
         alertsCount={alerts.length}
         paperEquity={paperSummary?.equity || 10000}
         brokerEquity={brokerAccountSummary?.equity || brokerConfigs[activeBrokerId]?.customStartingBalance || 15000}
+        isRealBrokerAccount={brokerAccountSummary?.isRealBrokerAccount ?? false}
         engineMode={engineMode}
         engineMessage={engineMessage}
         activeBrokerName={brokerConfigs[activeBrokerId]?.name || 'Capital.com'}

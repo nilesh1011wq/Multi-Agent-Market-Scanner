@@ -63,7 +63,7 @@ export class CapitalComAdapter implements IBrokerAdapter {
     hasValidCreds: boolean;
   } {
     const vaultConfig = brokerVault.getConfig('CAPITAL_COM');
-    const env = this.currentConfig?.environment || vaultConfig?.environment || 'DEMO';
+    let env = this.currentConfig?.environment || vaultConfig?.environment || 'DEMO';
 
     let apiKey = this.currentConfig?.apiKey?.trim() || '';
     if (!apiKey || apiKey.includes('••••')) {
@@ -79,6 +79,17 @@ export class CapitalComAdapter implements IBrokerAdapter {
     if (!identifier) {
       identifier = vaultConfig?.identifier?.trim() || '';
     }
+
+    // Support environment variables from process.env (e.g. Render Dashboard / .env)
+    const envApiKey = process.env.CAPITAL_COM_API_KEY?.trim();
+    const envPassword = (process.env.CAPITAL_COM_PASSWORD || process.env.CAPITAL_COM_API_SECRET)?.trim();
+    const envIdentifier = (process.env.CAPITAL_COM_IDENTIFIER || process.env.CAPITAL_COM_EMAIL)?.trim();
+    const envEnvironment = process.env.CAPITAL_COM_ENVIRONMENT?.trim().toUpperCase();
+
+    if ((!apiKey || apiKey.includes('••••')) && envApiKey) apiKey = envApiKey;
+    if ((!apiSecret || apiSecret.includes('••••')) && envPassword) apiSecret = envPassword;
+    if (!identifier && envIdentifier) identifier = envIdentifier;
+    if (envEnvironment === 'LIVE' || envEnvironment === 'DEMO') env = envEnvironment;
 
     const hasValidCreds = Boolean(
       apiKey &&

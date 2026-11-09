@@ -123,6 +123,12 @@ export class BrokerVault {
           if ('OANDA' in loaded) {
             delete (loaded as any).OANDA;
           }
+          // Ensure broker without credentials is not falsely marked CONNECTED
+          for (const c of Object.values(loaded) as BrokerConfig[]) {
+            if (!c.apiKey || c.apiKey.length < 5 || !c.identifier) {
+              c.status = 'DISCONNECTED';
+            }
+          }
           return loaded;
         }
       } catch (err: any) {

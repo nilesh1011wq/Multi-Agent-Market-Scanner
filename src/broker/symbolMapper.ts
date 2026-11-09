@@ -630,33 +630,44 @@ export function getAllInstrumentMappings(): InstrumentDefinition[] {
  * Reverse mapping: from broker epic or alias back to terminal symbol.
  */
 export function getTerminalSymbolFromBroker(brokerEpic: string, brokerId?: BrokerId): string {
-  const cleanEpic = brokerEpic.trim().toUpperCase().replace(/[\/\-_.]/g, '');
+  if (!brokerEpic) return 'EURUSD';
+  const cleanEpic = brokerEpic.trim().toUpperCase().replace(/[\s\/\-_.]/g, '');
+
+  // Direct fast mappings for Capital.com common instrument names
+  if (cleanEpic.includes('BRENTOIL') || cleanEpic === 'OILBRENT' || cleanEpic.includes('BRENTCRUDE')) return 'BRENT';
+  if (cleanEpic.includes('CRUDEOIL') || cleanEpic === 'OILCRUDE' || cleanEpic === 'USCRUDE' || cleanEpic === 'USOIL') return 'WTI';
+  if (cleanEpic.includes('BITCOIN') || cleanEpic === 'BTC' || cleanEpic.startsWith('BTCUSD')) return 'BTCUSD';
+  if (cleanEpic.includes('ETHEREUM') || cleanEpic === 'ETH' || cleanEpic.startsWith('ETHUSD')) return 'ETHUSD';
+  if (cleanEpic.includes('SOLANA') || cleanEpic === 'SOL' || cleanEpic.startsWith('SOLUSD')) return 'SOLUSD';
+  if (cleanEpic.includes('GOLD') || cleanEpic.startsWith('XAU')) return 'XAUUSD';
+  if (cleanEpic.includes('SILVER') || cleanEpic.startsWith('XAG')) return 'XAGUSD';
+  if (cleanEpic.includes('NATURALGAS') || cleanEpic.includes('NATGAS')) return 'NATGAS';
 
   for (const inst of ALL_INSTRUMENTS) {
     // Check terminal symbol directly
-    if (inst.terminalSymbol.toUpperCase().replace(/[\/\-_.]/g, '') === cleanEpic) {
+    if (inst.terminalSymbol.toUpperCase().replace(/[\s\/\-_.]/g, '') === cleanEpic) {
       return inst.terminalSymbol;
     }
 
     // Check specific broker if provided
     if (brokerId && inst.brokers[brokerId]) {
       const brokerInfo = inst.brokers[brokerId];
-      if (brokerInfo.epic.toUpperCase().replace(/[\/\-_.]/g, '') === cleanEpic) {
+      if (brokerInfo.epic.toUpperCase().replace(/[\s\/\-_.]/g, '') === cleanEpic) {
         return inst.terminalSymbol;
       }
       for (const alias of brokerInfo.aliases) {
-        if (alias.toUpperCase().replace(/[\/\-_.]/g, '') === cleanEpic) {
+        if (alias.toUpperCase().replace(/[\s\/\-_.]/g, '') === cleanEpic) {
           return inst.terminalSymbol;
         }
       }
     } else {
       // Check across all brokers
       for (const b of Object.values(inst.brokers)) {
-        if (b.epic.toUpperCase().replace(/[\/\-_.]/g, '') === cleanEpic) {
+        if (b.epic.toUpperCase().replace(/[\s\/\-_.]/g, '') === cleanEpic) {
           return inst.terminalSymbol;
         }
         for (const alias of b.aliases) {
-          if (alias.toUpperCase().replace(/[\/\-_.]/g, '') === cleanEpic) {
+          if (alias.toUpperCase().replace(/[\s\/\-_.]/g, '') === cleanEpic) {
             return inst.terminalSymbol;
           }
         }

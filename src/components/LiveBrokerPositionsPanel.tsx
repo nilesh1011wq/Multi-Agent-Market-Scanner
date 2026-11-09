@@ -168,9 +168,17 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
                 >
                   {isLive ? '🔴 LIVE REAL CAPITAL' : '🟡 DEMO PRACTICE'}
                 </span>
-                <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                  {activeBroker.status}
-                </span>
+                {accountSummary?.isRealBrokerAccount ? (
+                  <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20 font-bold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    LIVE ACCOUNT SYNCED
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20 font-bold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                    SANDBOX (NOT LINKED)
+                  </span>
+                )}
               </div>
               <div className="text-[11px] text-slate-400 flex items-center gap-2 mt-0.5">
                 <span>
@@ -239,6 +247,30 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
             )}
           </div>
         </div>
+
+        {/* Sandbox Notice Banner if Real Broker Account is Not Linked */}
+        {!accountSummary?.isRealBrokerAccount && (
+          <div className="mt-3 bg-amber-950/40 border border-amber-700/60 p-3 rounded flex flex-col md:flex-row md:items-center justify-between gap-3 text-amber-200">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold text-xs text-amber-300">
+                  Running in Local Simulation Sandbox (Real Capital.com Account Not Linked)
+                </p>
+                <p className="text-[11px] text-amber-200/80 mt-0.5 font-sans leading-relaxed">
+                  The terminal is currently simulating orders locally. To sync your 20 live open Capital.com positions and real account balance ($26,504 vs local sandbox), link your Capital.com Demo API key, email, and password.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={onOpenBrokerSettings}
+              className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded text-xs transition-colors shrink-0 cursor-pointer shadow-sm shadow-amber-500/20 flex items-center gap-1.5"
+            >
+              <Zap className="w-3.5 h-3.5 fill-current" />
+              <span>LINK CAPITAL.COM DEMO</span>
+            </button>
+          </div>
+        )}
 
         {/* Account Balances Grid (100% Synced with Active Broker) */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 pt-3">

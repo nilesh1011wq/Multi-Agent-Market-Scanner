@@ -315,6 +315,21 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
           <div className="space-y-3 bg-slate-950/70 p-4 rounded border border-slate-800/80">
             {selectedTab === 'CAPITAL_COM' && (
               <>
+                {/* Capital.com Quick Connect Guide */}
+                <div className="bg-cyan-950/40 border border-cyan-800/60 p-3 rounded text-[11px] text-cyan-200 space-y-1.5">
+                  <div className="font-bold text-cyan-300 flex items-center gap-1.5">
+                    <Globe className="w-3.5 h-3.5" />
+                    <span>How to Link Your Capital.com Demo Account (Sync 20 Live Trades):</span>
+                  </div>
+                  <ol className="list-decimal list-inside text-slate-300 space-y-1 text-[10px] leading-relaxed">
+                    <li>Log into your <strong>Capital.com</strong> platform (ensure top right shows <strong>Demo</strong>).</li>
+                    <li>Open <strong>Settings</strong> (or Account menu) &gt; <strong>API integrations</strong>.</li>
+                    <li>Under <strong>Demo account</strong>, click <strong>Generate new key</strong> and copy it.</li>
+                    <li>Paste the API Key below, along with your Capital.com account email and password.</li>
+                    <li>Click <strong>SAVE &amp; TEST CONNECTION</strong> below — all your live positions and balance will sync instantly!</li>
+                  </ol>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <div className="flex items-center justify-between mb-1">
