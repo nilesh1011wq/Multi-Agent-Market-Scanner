@@ -67,6 +67,9 @@ export function getDefaultBrokerConfigs(): Record<BrokerId, BrokerConfig> {
       identifier: '',
       isActive: true,
       isAutoExecutionEnabled: true,
+      defaultRiskPct: 1.0,
+      maxPortfolioHeatPct: 3.0,
+      maxDailyDrawdownPct: 3.0,
       status: 'DISCONNECTED',
     },
     MT5: {
@@ -78,6 +81,9 @@ export function getDefaultBrokerConfigs(): Record<BrokerId, BrokerConfig> {
       serverName: 'MetaQuotes-Demo',
       isActive: false,
       isAutoExecutionEnabled: false,
+      defaultRiskPct: 1.0,
+      maxPortfolioHeatPct: 3.0,
+      maxDailyDrawdownPct: 3.0,
       status: 'DISCONNECTED',
     },
     IG: {
@@ -90,6 +96,9 @@ export function getDefaultBrokerConfigs(): Record<BrokerId, BrokerConfig> {
       accountId: '',
       isActive: false,
       isAutoExecutionEnabled: false,
+      defaultRiskPct: 1.0,
+      maxPortfolioHeatPct: 3.0,
+      maxDailyDrawdownPct: 3.0,
       status: 'DISCONNECTED',
     },
   };

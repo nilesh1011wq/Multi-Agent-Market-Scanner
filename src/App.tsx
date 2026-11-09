@@ -25,6 +25,7 @@ import {
   BrokerId,
   BrokerAccountSummary,
   BrokerPosition,
+  BrokerClosedPosition,
   StandardizedOrderRequest,
 } from './types/broker';
 import { ExecutionAuditLog } from './broker/brokerManager';
@@ -74,6 +75,7 @@ export default function App() {
   const [activeBrokerId, setActiveBrokerId] = useState<BrokerId>('CAPITAL_COM');
   const [brokerAccountSummary, setBrokerAccountSummary] = useState<BrokerAccountSummary | null>(null);
   const [brokerPositions, setBrokerPositions] = useState<BrokerPosition[]>([]);
+  const [brokerClosedPositions, setBrokerClosedPositions] = useState<BrokerClosedPosition[]>([]);
   const [brokerAuditLogs, setBrokerAuditLogs] = useState<ExecutionAuditLog[]>([]);
   const [isBrokerModalOpen, setIsBrokerModalOpen] = useState(false);
   const [isOrderTicketOpen, setIsOrderTicketOpen] = useState(false);
@@ -86,6 +88,7 @@ export default function App() {
   }>({});
   const [isBrokerLoading, setIsBrokerLoading] = useState(false);
   const [brokerNotification, setBrokerNotification] = useState<string | null>(null);
+
 
   // Helper to open manual broker order ticket from anywhere in the terminal
   const openManualBrokerTicket = (params?: {
@@ -229,10 +232,9 @@ export default function App() {
         }
 
         // 6. Broker Gateway Telemetry
-        const [bConfRes, bAccRes, bPosRes, bLogsRes] = await Promise.all([
+        const [bConfRes, bAccRes, bLogsRes] = await Promise.all([
           fetch('/api/broker/configs'),
           fetch('/api/broker/account'),
-          fetch('/api/broker/positions'),
           fetch('/api/broker/audit-logs'),
         ]);
 
@@ -242,10 +244,11 @@ export default function App() {
           setActiveBrokerId(bConfData.activeBrokerId);
         }
         const bAccData = await bAccRes.json();
-        if (bAccData.success) setBrokerAccountSummary(bAccData.summary);
-
-        const bPosData = await bPosRes.json();
-        if (bPosData.success) setBrokerPositions(bPosData.positions);
+        if (bAccData.success) {
+          if (bAccData.summary) setBrokerAccountSummary(bAccData.summary);
+          if (bAccData.positions) setBrokerPositions(bAccData.positions);
+          if (bAccData.closedPositions) setBrokerClosedPositions(bAccData.closedPositions);
+        }
 
         const bLogsData = await bLogsRes.json();
         if (bLogsData.success) setBrokerAuditLogs(bLogsData.logs);
@@ -298,6 +301,8 @@ export default function App() {
       if (syncRes.success && syncRes.data) {
         if (syncRes.data.summary) setBrokerAccountSummary(syncRes.data.summary);
         if (syncRes.data.positions) setBrokerPositions(syncRes.data.positions);
+        if (syncRes.data.closedPositions) setBrokerClosedPositions(syncRes.data.closedPositions);
+        if (syncRes.data.logs) setBrokerAuditLogs(syncRes.data.logs);
       }
 
       if (logsRes.success && logsRes.data?.logs) {
@@ -309,6 +314,14 @@ export default function App() {
       setIsBrokerLoading(false);
     }
   };
+
+  // 100% Real-Time Broker Synchronization: Poll active broker telemetry every 6 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refreshBrokerData();
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [activeBrokerId]);
 
   const handleSaveBrokerConfig = async (brokerId: BrokerId, updated: Partial<BrokerConfig>) => {
     try {
@@ -400,6 +413,23 @@ export default function App() {
     }
   };
 
+  const handleMoveBrokerToBreakeven = async (ticketId: string) => {
+    try {
+      const res = await safeFetchJson('/api/broker/breakeven', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brokerId: activeBrokerId, ticketId }),
+      });
+      if (res.success && res.data?.success) {
+        setBrokerNotification(`Position #${ticketId} Stop Loss moved to Breakeven (${res.data.newStopLoss})`);
+        setTimeout(() => setBrokerNotification(null), 5000);
+        await refreshBrokerData();
+      }
+    } catch (err) {
+      console.error('Failed to move SL to Breakeven:', err);
+    }
+  };
+
   const handleFlattenAllBroker = async () => {
     try {
       const res = await safeFetchJson('/api/broker/flatten-all', { method: 'POST' });
@@ -410,6 +440,7 @@ export default function App() {
       console.error('Failed to flatten positions:', err);
     }
   };
+
 
   const handleSubmitBrokerOrder = async (order: StandardizedOrderRequest) => {
     const res = await safeFetchJson('/api/broker/order', {
@@ -681,7 +712,7 @@ export default function App() {
         testPassed={testPassed}
         oppCount={opportunities.length}
         alertsCount={alerts.length}
-        paperEquity={paperSummary?.equity || 10366}
+        paperEquity={brokerAccountSummary?.equity || paperSummary?.equity || 15000}
         engineMode={engineMode}
         engineMessage={engineMessage}
         activeBrokerName={brokerConfigs[activeBrokerId]?.name || 'Capital.com'}
@@ -744,13 +775,14 @@ export default function App() {
           {/* Tab 1: Terminal / Chart & Chamber View */}
           {activeTab === 'TERMINAL' && (
             <div className="flex flex-col space-y-4 p-4">
-              {/* Interactive TradingView Style Candlestick Chart */}
+              {/* Interactive TradingView Style Candlestick Chart with Live Broker Overlays */}
               <ChartPane
                 symbol={activeSymbol}
                 timeframe={activeTimeframe}
                 candles={candles}
                 snapshot={snapshot}
                 onSelectTimeframe={setActiveTimeframe}
+                activePositions={brokerPositions}
               />
 
               {/* Master 10-Agent Debate Chamber & Chief Arbiter */}
@@ -855,11 +887,13 @@ export default function App() {
                 activeBroker={brokerConfigs[activeBrokerId] || brokerConfigs.CAPITAL_COM}
                 accountSummary={brokerAccountSummary}
                 positions={brokerPositions}
+                closedPositions={brokerClosedPositions}
                 auditLogs={brokerAuditLogs}
                 isLoading={isBrokerLoading}
                 onRefresh={refreshBrokerData}
                 onClosePosition={handleCloseBrokerPosition}
                 onFlattenAll={handleFlattenAllBroker}
+                onMoveToBreakeven={handleMoveBrokerToBreakeven}
                 onOpenBrokerSettings={() => setIsBrokerModalOpen(true)}
                 onOpenManualTicket={(sym) => {
                   if (sym) setActiveSymbol(sym);
@@ -954,41 +988,57 @@ export default function App() {
             </div>
           </div>
 
-          {/* Section 3: Paper Account Mini Widget */}
+          {/* Section 3: Broker / Paper Account Mini Widget */}
           <div className="p-3.5 border-b border-slate-800 space-y-2.5">
             <div className="flex items-center justify-between text-xs font-mono text-slate-300 font-semibold">
               <div className="flex items-center gap-1.5">
                 <Wallet className="w-3.5 h-3.5 text-emerald-400" />
-                <span>PAPER PORTFOLIO</span>
+                <span>{brokerConfigs[activeBrokerId]?.isConnected ? 'BROKER PORTFOLIO' : 'PAPER PORTFOLIO'}</span>
               </div>
               <span className="text-[10px] text-emerald-400 font-bold tabular-nums">
-                ${paperSummary ? paperSummary.equity.toLocaleString() : '10,366'}
+                ${brokerConfigs[activeBrokerId]?.isConnected && brokerAccountSummary
+                  ? brokerAccountSummary.equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                  : (paperSummary ? paperSummary.equity.toLocaleString() : '10,366')}
               </span>
             </div>
             <div className="bg-slate-900/60 p-2.5 rounded border border-slate-800/80 font-mono text-xs space-y-1.5">
               <div className="flex justify-between text-slate-400">
                 <span>Realized PnL:</span>
-                <span className="text-emerald-400 font-bold">
-                  {paperSummary ? `+${paperSummary.totalRealizedR}R` : '+2.5R'}
+                <span className={`font-bold ${(brokerConfigs[activeBrokerId]?.isConnected ? (brokerAccountSummary?.realizedPnL ?? 0) >= 0 : (paperSummary?.totalRealizedR ?? 0) >= 0) ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {brokerConfigs[activeBrokerId]?.isConnected && brokerAccountSummary
+                    ? `${brokerAccountSummary.realizedPnL >= 0 ? '+' : ''}$${brokerAccountSummary.realizedPnL.toFixed(2)} (${brokerAccountSummary.realizedPnLR >= 0 ? '+' : ''}${brokerAccountSummary.realizedPnLR.toFixed(1)}R)`
+                    : (paperSummary ? `+${paperSummary.totalRealizedR}R` : '+2.5R')}
                 </span>
               </div>
               <div className="flex justify-between text-slate-400">
                 <span>Win Rate:</span>
                 <span className="text-cyan-300 font-bold">
-                  {paperSummary ? `${paperSummary.winRate}%` : '66.7%'}
+                  {brokerConfigs[activeBrokerId]?.isConnected && brokerAccountSummary
+                    ? `${brokerAccountSummary.winRate.toFixed(1)}%`
+                    : (paperSummary ? `${paperSummary.winRate}%` : '66.7%')}
                 </span>
               </div>
               <div className="flex justify-between text-slate-400">
                 <span>Active Positions:</span>
                 <span className="text-slate-200 font-bold">
-                  {paperOpenPositions.length} Open
+                  {brokerConfigs[activeBrokerId]?.isConnected
+                    ? `${brokerPositions.length} Open`
+                    : `${paperOpenPositions.length} Open`}
                 </span>
               </div>
+              {brokerConfigs[activeBrokerId]?.isConnected && (
+                <div className="flex justify-between text-slate-400 text-[11px]">
+                  <span>Margin Level:</span>
+                  <span className="text-emerald-400 font-bold">
+                    {brokerAccountSummary ? `${brokerAccountSummary.marginLevel.toFixed(0)}%` : '100%'}
+                  </span>
+                </div>
+              )}
               <button
-                onClick={() => setActiveTab('PAPER_TRADING')}
+                onClick={() => setActiveTab(brokerConfigs[activeBrokerId]?.isConnected ? 'BROKER' : 'PAPER_TRADING')}
                 className="w-full mt-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded text-[11px] font-bold transition-colors cursor-pointer"
               >
-                Open Paper Simulator
+                {brokerConfigs[activeBrokerId]?.isConnected ? 'Open Broker Gateway' : 'Open Paper Simulator'}
               </button>
             </div>
           </div>
@@ -1045,6 +1095,7 @@ export default function App() {
         isOpen={isOrderTicketOpen}
         onClose={() => setIsOrderTicketOpen(false)}
         activeBroker={brokerConfigs[activeBrokerId] || brokerConfigs.CAPITAL_COM}
+        accountSummary={brokerAccountSummary}
         defaultSymbol={manualTicketState.symbol || activeSymbol}
         defaultDirection={
           manualTicketState.direction ||

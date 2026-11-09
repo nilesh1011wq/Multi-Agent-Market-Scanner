@@ -1,12 +1,13 @@
 import {
   BrokerAccountSummary,
+  BrokerClosedPosition,
   BrokerConfig,
   BrokerOrderResult,
   BrokerPosition,
   IBrokerAdapter,
   StandardizedOrderRequest,
 } from '../../types/broker';
-import { getBrokerSymbol } from '../symbolMapper';
+import { getBrokerSymbol, calculatePositionPnL } from '../symbolMapper';
 
 export class MetaTraderAdapter implements IBrokerAdapter {
   readonly id = 'MT5';
@@ -14,7 +15,9 @@ export class MetaTraderAdapter implements IBrokerAdapter {
 
   private currentConfig: BrokerConfig | null = null;
   private simulatedPositions: BrokerPosition[] = [];
+  private closedPositions: BrokerClosedPosition[] = [];
   private simulatedBalance = 25000;
+
 
   private getBaseUrl(): string {
     const accId = this.currentConfig?.accountId || 'mt5-demo-account';
@@ -118,6 +121,10 @@ export class MetaTraderAdapter implements IBrokerAdapter {
     return [...this.simulatedPositions];
   }
 
+  public async getClosedPositions(): Promise<BrokerClosedPosition[]> {
+    return [...this.closedPositions];
+  }
+
   public async placeOrder(order: StandardizedOrderRequest): Promise<BrokerOrderResult> {
     const mtSymbol = getBrokerSymbol(order.symbol, 'MT5');
     const env = this.currentConfig?.environment || 'DEMO';
@@ -150,6 +157,8 @@ export class MetaTraderAdapter implements IBrokerAdapter {
             symbol: order.symbol,
             direction: order.direction,
             units: order.units,
+            riskPct: order.riskPct,
+            riskCapitalUsd: order.riskCapitalUsd,
             fillPrice: order.entryPrice || 1.085,
             stopLoss: order.stopLoss,
             takeProfit: order.takeProfit1,
@@ -180,6 +189,10 @@ export class MetaTraderAdapter implements IBrokerAdapter {
       takeProfit: order.takeProfit1,
       unrealizedPnL: 0,
       unrealizedPnLR: 0,
+      riskPct: order.riskPct ?? 1.0,
+      riskCapitalUsd: order.riskCapitalUsd,
+      isBreakevenLocked: false,
+      source: order.source || 'MANUAL_TICKET',
       openedAt: Date.now(),
       environment: env,
     };
@@ -193,28 +206,79 @@ export class MetaTraderAdapter implements IBrokerAdapter {
       symbol: order.symbol,
       direction: order.direction,
       units: order.units,
+      riskPct: order.riskPct ?? 1.0,
+      riskCapitalUsd: order.riskCapitalUsd,
       fillPrice,
       stopLoss: order.stopLoss,
       takeProfit: order.takeProfit1,
       timestamp: Date.now(),
       status: 'FILLED',
-      message: `Executed on MT5 ${env} [Symbol: ${mtSymbol}, Volume: ${order.units} lots, Ticket #${ticketId}]`,
+      message: `Executed on MT5 ${env} [Symbol: ${mtSymbol}, Volume: ${order.units} lots, Risk: ${order.riskPct ?? 1.0}%, Ticket #${ticketId}]`,
     };
+  }
+
+  public async modifyPosition(
+    ticketId: string,
+    updates: { stopLoss?: number; takeProfit?: number; isBreakevenLocked?: boolean }
+  ): Promise<{ success: boolean; message: string }> {
+    const pos = this.simulatedPositions.find((p) => p.brokerTicketId === ticketId);
+    if (pos) {
+      if (updates.stopLoss !== undefined) pos.stopLoss = updates.stopLoss;
+      if (updates.takeProfit !== undefined) pos.takeProfit = updates.takeProfit;
+      if (updates.isBreakevenLocked !== undefined) pos.isBreakevenLocked = updates.isBreakevenLocked;
+      return { success: true, message: `Updated MT5 Ticket #${ticketId} SL to ${pos.stopLoss}.` };
+    }
+    return { success: false, message: `MT5 Ticket #${ticketId} not found.` };
   }
 
   public async closePosition(ticketId: string): Promise<{ success: boolean; message: string }> {
     const idx = this.simulatedPositions.findIndex((p) => p.brokerTicketId === ticketId);
     if (idx !== -1) {
       const pos = this.simulatedPositions.splice(idx, 1)[0];
-      this.simulatedBalance += pos.unrealizedPnL;
+      const { pnlUsd, pnlR } = calculatePositionPnL(
+        pos.symbol,
+        'MT5',
+        pos.direction,
+        pos.units,
+        pos.openPrice,
+        pos.currentPrice,
+        pos.stopLoss
+      );
+      this.simulatedBalance = Math.round((this.simulatedBalance + pnlUsd) * 100) / 100;
+      this.closedPositions.unshift({
+        id: `closed-${pos.brokerTicketId}-${Date.now()}`,
+        brokerId: 'MT5',
+        brokerTicketId: pos.brokerTicketId,
+        symbol: pos.symbol,
+        direction: pos.direction,
+        units: pos.units,
+        openPrice: pos.openPrice,
+        exitPrice: pos.currentPrice,
+        stopLoss: pos.stopLoss,
+        takeProfit: pos.takeProfit,
+        realizedPnL: pnlUsd,
+        realizedPnLR: pnlR,
+        riskPct: pos.riskPct ?? 1.0,
+        riskCapitalUsd: pos.riskCapitalUsd,
+        openedAt: pos.openedAt,
+        closedAt: Date.now(),
+        closeReason: 'MANUALLY_CLOSED',
+        source: pos.source || 'MANUAL_TICKET',
+        environment: pos.environment,
+      });
       return { success: true, message: `Closed MT5 Ticket #${ticketId}.` };
     }
     return { success: true, message: `Position #${ticketId} closed.` };
   }
 
   public async flattenAll(): Promise<{ closedCount: number; errors: string[] }> {
-    const count = this.simulatedPositions.length;
-    this.simulatedPositions = [];
-    return { closedCount: count, errors: [] };
+    const open = [...this.simulatedPositions];
+    let closedCount = 0;
+    for (const p of open) {
+      await this.closePosition(p.brokerTicketId);
+      closedCount++;
+    }
+    return { closedCount, errors: [] };
   }
 }
+

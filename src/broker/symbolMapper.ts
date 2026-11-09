@@ -668,38 +668,183 @@ export function getTerminalSymbolFromBroker(brokerEpic: string, brokerId?: Broke
 }
 
 /**
- * Calculates correct broker lot size or discrete contract units based on broker sizing rules.
+ * Returns the USD conversion factor per 1 point of price movement for a given symbol and price.
+ * For pairs where USD is the base currency (USDJPY, USDCAD, USDCHF), 1 unit of quote currency = 1 / price USD.
+ */
+export function getUsdValuePerPoint(terminalSymbol: string, referencePrice: number): number {
+  const sym = terminalSymbol.toUpperCase();
+  if ((sym === 'USDJPY' || sym === 'USDCAD' || sym === 'USDCHF') && referencePrice > 0) {
+    return 1 / referencePrice;
+  }
+  return 1;
+}
+
+/**
+ * Calculates correct broker lot size or discrete contract units based on broker sizing rules
+ * and exact percentage of risk capital.
+ * Note: riskPercent can be passed either as decimal (e.g. 0.01 for 1%) or percentage (e.g. 1.0 for 1%).
  */
 export function calculateBrokerLotSize(
   terminalSymbol: string,
   brokerId: BrokerId,
   accountBalance: number,
-  riskPercent: number = 0.01, // 1% risk
-  riskDistanceInPrice: number = 0.0050
+  riskPercent: number = 0.01, // 0.01 (1%) or 1.0 (1%)
+  riskDistanceInPrice: number = 0.0050,
+  entryPrice?: number
 ): number {
   const details = getBrokerSymbolDetails(terminalSymbol, brokerId);
-  const riskUsd = accountBalance * riskPercent;
+  // Normalize riskPercent: if > 0.15, treat as percentage (e.g. 1.0 -> 0.01), else decimal (0.01 -> 0.01)
+  const normalizedRiskFraction = riskPercent > 0.15 ? riskPercent / 100 : riskPercent;
+  const riskUsd = Math.max(0, accountBalance * normalizedRiskFraction);
 
-  if (riskDistanceInPrice <= 0) return details.minLot;
+  if (riskDistanceInPrice <= 0 || riskUsd <= 0) return details.minLot;
 
-  let calculatedUnits = 0;
+  const refPrice = entryPrice && entryPrice > 0 ? entryPrice : (terminalSymbol.toUpperCase() === 'USDJPY' ? 152 : 1);
+  const usdPerPoint = getUsdValuePerPoint(terminalSymbol, refPrice);
+  const effectiveMultiplier = (details.multiplier || 1) * usdPerPoint;
 
-  if (brokerId === 'MT5') {
-    // Standard MT5 lot calculation: Lot = Risk / (Distance * ContractMultiplier)
-    const rawLots = riskUsd / (riskDistanceInPrice * details.multiplier);
-    const stepped = Math.floor(rawLots / details.step) * details.step;
-    calculatedUnits = Math.max(details.minLot, Math.min(10, Math.round(stepped * 100) / 100));
-  } else if (brokerId === 'IG') {
-    // IG Markets uses standard / mini CFD contract sizes
-    const rawContracts = riskUsd / (riskDistanceInPrice * (details.multiplier || 1));
-    const stepped = Math.floor(rawContracts / details.step) * details.step;
-    calculatedUnits = Math.max(details.minLot, Math.min(100, Math.round(stepped * 10) / 10));
-  } else {
-    // Capital.com uses contracts/shares
-    const rawContracts = riskUsd / riskDistanceInPrice;
-    const stepped = Math.floor(rawContracts / details.step) * details.step;
-    calculatedUnits = Math.max(details.minLot, Math.min(100000, stepped));
-  }
+  const rawUnits = riskUsd / (riskDistanceInPrice * effectiveMultiplier);
+  const step = details.step || 0.01;
+  const stepped = Math.floor(rawUnits / step) * step;
 
-  return calculatedUnits;
+  let maxUnits = 500000;
+  if (brokerId === 'MT5') maxUnits = 50;
+  else if (brokerId === 'IG') maxUnits = 500;
+
+  const clamped = Math.max(details.minLot, Math.min(maxUnits, stepped));
+  return Number(clamped.toFixed(4));
 }
+
+export interface RiskOrderMetrics {
+  units: number;
+  riskPct: number;
+  riskCapitalUsd: number;
+  effectiveRiskUsd: number;
+  effectiveRiskPct: number;
+  stopDistance: number;
+  rewardDistance: number;
+  riskRewardRatio: number;
+  spreadPadding: number;
+  minLot: number;
+  step: number;
+  multiplier: number;
+}
+
+/**
+ * Full institutional Risk-Percentage Position Sizing calculator used across OrderTicketModal and BrokerManager.
+ * @param riskPct Risk percentage of equity (e.g. 1.0 = 1.0% of account equity)
+ */
+export function calculateRiskBasedOrderMetrics(
+  terminalSymbol: string,
+  brokerId: BrokerId,
+  accountEquity: number,
+  riskPct: number,
+  entryPrice: number,
+  stopLoss: number,
+  takeProfit?: number
+): RiskOrderMetrics {
+  const def = getInstrumentDefinition(terminalSymbol);
+  const details = getBrokerSymbolDetails(terminalSymbol, brokerId);
+  const safeEquity = Math.max(100, accountEquity || 10000);
+  const cleanRiskPct = Math.max(0.1, Math.min(10, riskPct || 1.0));
+  const riskCapitalUsd = Number(((safeEquity * cleanRiskPct) / 100).toFixed(2));
+
+  const stopDistance = Math.abs(entryPrice - stopLoss);
+  const rewardDistance = takeProfit ? Math.abs(takeProfit - entryPrice) : stopDistance * 2;
+  const riskRewardRatio = stopDistance > 0 ? Number((rewardDistance / stopDistance).toFixed(2)) : 2.0;
+  const spreadPadding = Number(((def?.minSpread || 0.0001) * 1.5).toFixed(def?.digits || 5));
+
+  const units = calculateBrokerLotSize(
+    terminalSymbol,
+    brokerId,
+    safeEquity,
+    cleanRiskPct / 100,
+    stopDistance,
+    entryPrice
+  );
+
+  const usdPerPoint = getUsdValuePerPoint(terminalSymbol, entryPrice);
+  const effectiveRiskUsd = Number(
+    (units * stopDistance * (details.multiplier || 1) * usdPerPoint).toFixed(2)
+  );
+  const effectiveRiskPct = Number(((effectiveRiskUsd / safeEquity) * 100).toFixed(2));
+
+  return {
+    units,
+    riskPct: cleanRiskPct,
+    riskCapitalUsd,
+    effectiveRiskUsd,
+    effectiveRiskPct,
+    stopDistance,
+    rewardDistance,
+    riskRewardRatio,
+    spreadPadding,
+    minLot: details.minLot,
+    step: details.step,
+    multiplier: details.multiplier,
+  };
+}
+
+/**
+ * Accurate unrealized/realized PnL ($ and R-multiple) calculator for any broker position.
+ */
+export function calculatePositionPnL(
+  terminalSymbol: string,
+  brokerId: BrokerId,
+  direction: 'BUY' | 'SELL',
+  units: number,
+  openPrice: number,
+  currentPrice: number,
+  stopLoss: number
+): { pnlUsd: number; pnlR: number } {
+  const details = getBrokerSymbolDetails(terminalSymbol, brokerId);
+  const priceDiff = direction === 'BUY' ? currentPrice - openPrice : openPrice - currentPrice;
+  const usdPerPoint = getUsdValuePerPoint(terminalSymbol, currentPrice || openPrice);
+  const pnlUsd = Number((priceDiff * units * (details.multiplier || 1) * usdPerPoint).toFixed(2));
+
+  const initialRiskDist = Math.abs(openPrice - stopLoss);
+  // If SL was moved to breakeven (distance ~ 0), fall back to 0.5% of openPrice as 1R reference
+  const effectiveRiskDist =
+    initialRiskDist > openPrice * 0.0002 ? initialRiskDist : openPrice * 0.005;
+  const pnlR = effectiveRiskDist > 0 ? Number((priceDiff / effectiveRiskDist).toFixed(2)) : 0;
+
+  return { pnlUsd, pnlR };
+}
+
+/**
+ * Checks whether two instruments share directional currency or asset-class correlation.
+ */
+export function areInstrumentsCorrelated(
+  symA: string,
+  dirA: 'BUY' | 'SELL',
+  symB: string,
+  dirB: 'BUY' | 'SELL'
+): boolean {
+  const a = symA.toUpperCase();
+  const b = symB.toUpperCase();
+  if (a === b) return dirA === dirB;
+
+  const defA = getInstrumentDefinition(a);
+  const defB = getInstrumentDefinition(b);
+
+  // Crypto assets move together directionally
+  if (defA?.assetClass === 'CRYPTO' && defB?.assetClass === 'CRYPTO') {
+    return dirA === dirB;
+  }
+  // Precious metals move together
+  if ((a === 'XAUUSD' || a === 'XAGUSD') && (b === 'XAUUSD' || b === 'XAGUSD')) {
+    return dirA === dirB;
+  }
+  // Crude oil benchmarks move together
+  if ((a === 'WTI' || a === 'BRENT') && (b === 'WTI' || b === 'BRENT')) {
+    return dirA === dirB;
+  }
+  // Forex USD directional exposure check
+  if (defA?.assetClass === 'FOREX' && defB?.assetClass === 'FOREX') {
+    const usdLongA = (a.startsWith('USD') && dirA === 'BUY') || (a.endsWith('USD') && dirA === 'SELL');
+    const usdLongB = (b.startsWith('USD') && dirB === 'BUY') || (b.endsWith('USD') && dirB === 'SELL');
+    return usdLongA === usdLongB;
+  }
+  return false;
+}
+

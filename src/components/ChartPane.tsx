@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Candle, FeatureSnapshot, Timeframe } from '../types/market';
-import { Layers, Eye, EyeOff } from 'lucide-react';
+import { BrokerPosition } from '../types/broker';
 
 interface ChartPaneProps {
   symbol: string;
@@ -8,6 +8,7 @@ interface ChartPaneProps {
   candles: Candle[];
   snapshot: FeatureSnapshot | null;
   onSelectTimeframe: (tf: Timeframe) => void;
+  activePositions?: BrokerPosition[];
 }
 
 export const ChartPane: React.FC<ChartPaneProps> = ({
@@ -16,6 +17,7 @@ export const ChartPane: React.FC<ChartPaneProps> = ({
   candles,
   snapshot,
   onSelectTimeframe,
+  activePositions = [],
 }) => {
   const [showEMAs, setShowEMAs] = useState(true);
   const [showBB, setShowBB] = useState(true);
@@ -25,12 +27,17 @@ export const ChartPane: React.FC<ChartPaneProps> = ({
 
   const timeframes: Timeframe[] = ['M15', 'H1', 'H4', 'D1', 'W1'];
 
+  // Filter active broker positions matching the current symbol
+  const symbolPositions = useMemo(() => {
+    return activePositions.filter((p) => p.symbol.toUpperCase() === symbol.toUpperCase());
+  }, [activePositions, symbol]);
+
   // Slice visible candles (last 60 bars for clean display)
   const visibleCandles = useMemo(() => {
     return candles.slice(Math.max(0, candles.length - 60));
   }, [candles]);
 
-  // Determine chart price range
+  // Determine chart price range (including active position Entry/SL/TP levels)
   const { minPrice, maxPrice, maxVolume } = useMemo(() => {
     if (visibleCandles.length === 0) return { minPrice: 1, maxPrice: 2, maxVolume: 1000 };
     let min = Infinity;
@@ -43,13 +50,28 @@ export const ChartPane: React.FC<ChartPaneProps> = ({
       if (c.volume > maxVol) maxVol = c.volume;
     }
 
+    for (const pos of symbolPositions) {
+      if (pos.openPrice > 0) {
+        min = Math.min(min, pos.openPrice);
+        max = Math.max(max, pos.openPrice);
+      }
+      if (pos.stopLoss > 0) {
+        min = Math.min(min, pos.stopLoss);
+        max = Math.max(max, pos.stopLoss);
+      }
+      if (pos.takeProfit > 0) {
+        min = Math.min(min, pos.takeProfit);
+        max = Math.max(max, pos.takeProfit);
+      }
+    }
+
     const padding = (max - min) * 0.08 || 0.001;
     return {
       minPrice: min - padding,
       maxPrice: max + padding,
       maxVolume: maxVol || 1000,
     };
-  }, [visibleCandles]);
+  }, [visibleCandles, symbolPositions]);
 
   const chartHeight = 360;
   const chartWidth = 720;
@@ -59,7 +81,10 @@ export const ChartPane: React.FC<ChartPaneProps> = ({
     return chartHeight - ((price - minPrice) / priceRange) * chartHeight;
   };
 
-  const hoveredCandle = hoverIndex !== null && visibleCandles[hoverIndex] ? visibleCandles[hoverIndex] : visibleCandles[visibleCandles.length - 1];
+  const hoveredCandle =
+    hoverIndex !== null && visibleCandles[hoverIndex]
+      ? visibleCandles[hoverIndex]
+      : visibleCandles[visibleCandles.length - 1];
 
   return (
     <div className="bg-[#090d16] border-b border-slate-800 flex flex-col">
@@ -236,6 +261,47 @@ export const ChartPane: React.FC<ChartPaneProps> = ({
             );
           })}
 
+          {/* Live Broker Open Position Trade Overlays (Entry, SL, TP) */}
+          {symbolPositions.map((pos) => (
+            <g key={`pos-overlay-${pos.brokerTicketId}`}>
+              {/* Entry Line */}
+              {pos.openPrice > 0 && (
+                <line
+                  x1="0"
+                  y1={getY(pos.openPrice)}
+                  x2={chartWidth}
+                  y2={getY(pos.openPrice)}
+                  stroke="#22d3ee"
+                  strokeWidth="1.5"
+                />
+              )}
+              {/* Stop Loss Line */}
+              {pos.stopLoss > 0 && (
+                <line
+                  x1="0"
+                  y1={getY(pos.stopLoss)}
+                  x2={chartWidth}
+                  y2={getY(pos.stopLoss)}
+                  stroke="#f43f5e"
+                  strokeWidth="1.5"
+                  strokeDasharray="5 3"
+                />
+              )}
+              {/* Take Profit Line */}
+              {pos.takeProfit > 0 && (
+                <line
+                  x1="0"
+                  y1={getY(pos.takeProfit)}
+                  x2={chartWidth}
+                  y2={getY(pos.takeProfit)}
+                  stroke="#10b981"
+                  strokeWidth="1.5"
+                  strokeDasharray="5 3"
+                />
+              )}
+            </g>
+          ))}
+
           {/* Crosshair on Hover */}
           {hoverIndex !== null && (
             <line
@@ -250,6 +316,39 @@ export const ChartPane: React.FC<ChartPaneProps> = ({
             />
           )}
         </svg>
+
+        {/* Live Open Trade Badges on Chart */}
+        {symbolPositions.length > 0 && (
+          <div className="absolute top-3 right-3 flex flex-col gap-1.5 pointer-events-none">
+            {symbolPositions.map((pos) => (
+              <div
+                key={`badge-${pos.brokerTicketId}`}
+                className="bg-slate-950/90 border border-cyan-500/40 px-2.5 py-1.5 rounded text-[10px] font-mono shadow-lg flex items-center gap-2"
+              >
+                <span
+                  className={`px-1.5 py-0.2 rounded font-bold ${
+                    pos.direction === 'BUY'
+                      ? 'bg-emerald-500/20 text-emerald-300'
+                      : 'bg-rose-500/20 text-rose-300'
+                  }`}
+                >
+                  {pos.direction} {pos.units}
+                </span>
+                <span className="text-cyan-300 font-semibold">@ {pos.openPrice}</span>
+                <span className="text-rose-400">SL: {pos.stopLoss}</span>
+                <span className="text-emerald-400">TP: {pos.takeProfit}</span>
+                <span
+                  className={`font-bold tabular-nums ${
+                    pos.unrealizedPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  }`}
+                >
+                  {pos.unrealizedPnL >= 0 ? '+' : ''}${pos.unrealizedPnL.toFixed(2)} ({pos.unrealizedPnLR >= 0 ? '+' : ''}
+                  {pos.unrealizedPnLR.toFixed(2)}R)
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Watermark / Instrument Details */}
         <div className="absolute top-3 left-4 pointer-events-none select-none">
@@ -277,11 +376,12 @@ export const ChartPane: React.FC<ChartPaneProps> = ({
 
         {/* Level Legend Overlay */}
         <div className="absolute bottom-2 right-3 pointer-events-none text-[10px] font-mono text-slate-500 flex items-center gap-3 bg-slate-950/70 px-2 py-1 rounded border border-slate-800/60">
-          <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-cyan-400 inline-block"></span> PP Pivot</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-rose-500 inline-block"></span> R1 Resistance</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-emerald-500 inline-block"></span> S1 Support</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-cyan-400 inline-block"></span> PP / Entry</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-rose-500 inline-block"></span> R1 / Stop Loss</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-emerald-500 inline-block"></span> S1 / Take Profit</span>
         </div>
       </div>
     </div>
   );
 };
+

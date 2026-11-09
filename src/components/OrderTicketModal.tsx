@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { BrokerConfig, StandardizedOrderRequest } from '../types/broker';
+import { BrokerAccountSummary, BrokerConfig, StandardizedOrderRequest } from '../types/broker';
 import { WATCHLIST } from '../data/marketDataService';
-import { getBrokerSymbol, getBrokerSymbolDetails } from '../broker/symbolMapper';
+import {
+  getBrokerSymbol,
+  getBrokerSymbolDetails,
+  calculateRiskBasedOrderMetrics,
+} from '../broker/symbolMapper';
 import {
   X,
   Sliders,
@@ -9,13 +13,14 @@ import {
   Send,
   Tag,
   Radio,
-  ArrowUpDown,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface OrderTicketModalProps {
   isOpen: boolean;
   onClose: () => void;
   activeBroker: BrokerConfig;
+  accountSummary?: BrokerAccountSummary | null;
   defaultSymbol?: string;
   defaultDirection?: 'BUY' | 'SELL';
   defaultEntryPrice?: number;
@@ -24,10 +29,13 @@ interface OrderTicketModalProps {
   onSubmitOrder: (order: StandardizedOrderRequest) => Promise<void>;
 }
 
+const RISK_PRESETS = [0.5, 1.0, 1.5, 2.0];
+
 export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
   isOpen,
   onClose,
   activeBroker,
+  accountSummary,
   defaultSymbol = 'EURUSD',
   defaultDirection = 'BUY',
   defaultEntryPrice,
@@ -37,6 +45,7 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
 }) => {
   const [symbol, setSymbol] = useState(defaultSymbol);
   const [direction, setDirection] = useState<'BUY' | 'SELL'>(defaultDirection);
+  const [riskPct, setRiskPct] = useState<number>(activeBroker.defaultRiskPct || 1.0);
   const [units, setUnits] = useState(1000);
   const [entryPrice, setEntryPrice] = useState(defaultEntryPrice || 1.1143);
   const [stopLoss, setStopLoss] = useState(defaultStopLoss || 1.1100);
@@ -48,20 +57,22 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
 
   const brokerEpic = getBrokerSymbol(symbol, activeBroker.id);
   const brokerDetails = getBrokerSymbolDetails(symbol, activeBroker.id);
+  const liveEquity = accountSummary?.equity && accountSummary.equity > 0 ? accountSummary.equity : 15000;
 
   // Reset state when modal opens or defaults change
   useEffect(() => {
     if (isOpen) {
       setSymbol(defaultSymbol);
       setDirection(defaultDirection);
+      setRiskPct(activeBroker.defaultRiskPct || 1.0);
       if (defaultEntryPrice) setEntryPrice(defaultEntryPrice);
       if (defaultStopLoss) setStopLoss(defaultStopLoss);
       if (defaultTakeProfit) setTakeProfit(defaultTakeProfit);
       setErrorMsg(null);
     }
-  }, [isOpen, defaultSymbol, defaultDirection, defaultEntryPrice, defaultStopLoss, defaultTakeProfit]);
+  }, [isOpen, defaultSymbol, defaultDirection, defaultEntryPrice, defaultStopLoss, defaultTakeProfit, activeBroker.defaultRiskPct]);
 
-  // When opening or changing symbol, fetch the latest real live quote
+  // When opening or changing symbol/direction, fetch the latest real live quote
   useEffect(() => {
     if (!isOpen) return;
 
@@ -107,15 +118,6 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
             setStopLoss(sl);
             setTakeProfit(tp);
           }
-
-          // Set sensible default units based on broker minLot
-          if (activeBroker.id === 'MT5') {
-            setUnits(brokerDetails.minLot || 0.1);
-          } else if (activeBroker.id === 'IG') {
-            setUnits(brokerDetails.minLot || 1);
-          } else {
-            setUnits(brokerDetails.minLot || 100);
-          }
         }
       } catch (e) {
         console.error('Failed to fetch quote in ticket:', e);
@@ -127,6 +129,23 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
       isMounted = false;
     };
   }, [symbol, isOpen, direction, activeBroker.id]);
+
+  // Automatically recalculate quantity (units/lots) from Risk % of Live Broker Equity whenever inputs change
+  const riskMetrics = calculateRiskBasedOrderMetrics(
+    symbol,
+    activeBroker.id,
+    liveEquity,
+    riskPct,
+    entryPrice,
+    stopLoss,
+    takeProfit
+  );
+
+  useEffect(() => {
+    if (isOpen && entryPrice > 0 && stopLoss > 0) {
+      setUnits(riskMetrics.units);
+    }
+  }, [isOpen, symbol, activeBroker.id, liveEquity, riskPct, entryPrice, stopLoss, riskMetrics.units]);
 
   if (!isOpen) return null;
 
@@ -157,6 +176,8 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
         direction,
         orderType: 'MARKET',
         units: Number(units),
+        riskPct: Number(riskPct),
+        riskCapitalUsd: riskMetrics.riskCapitalUsd,
         entryPrice: Number(entryPrice),
         stopLoss: Number(stopLoss),
         takeProfit1: Number(takeProfit),
@@ -182,7 +203,7 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
           <div className="flex items-center gap-2">
             <Sliders className="w-4 h-4 text-cyan-400" />
             <h2 className="font-display font-bold text-sm text-slate-100 uppercase tracking-wider">
-              Broker Order Ticket
+              Risk-Sized Broker Order Ticket
             </h2>
           </div>
           <button
@@ -194,23 +215,26 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
         </div>
 
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-4 space-y-3.5">
-          {/* Target Broker & Environment Readout */}
+        <form onSubmit={handleSubmit} className="p-4 space-y-3">
+          {/* Target Broker & Live Equity Readout */}
           <div className="bg-slate-950 p-2.5 rounded border border-slate-800 flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-slate-400">
               <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-              <span>Target Broker:</span>
-            </div>
-            <div className="flex items-center gap-1.5 font-bold">
-              <span className="text-slate-200">{activeBroker.name}</span>
+              <span>{activeBroker.name}</span>
               <span
-                className={`text-[9px] px-1.5 py-0.2 rounded border ${
+                className={`text-[9px] px-1.5 py-0.2 rounded border font-bold ${
                   activeBroker.environment === 'LIVE'
                     ? 'bg-rose-500/20 text-rose-300 border-rose-500/30'
                     : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
                 }`}
               >
                 {activeBroker.environment}
+              </span>
+            </div>
+            <div className="text-right">
+              <span className="text-[10px] text-slate-500 mr-1.5">EQUITY:</span>
+              <span className="text-emerald-400 font-bold tabular-nums">
+                ${liveEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
           </div>
@@ -265,7 +289,7 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
           <div className="bg-cyan-950/30 border border-cyan-800/40 p-2 rounded flex items-center justify-between text-[11px]">
             <div className="flex items-center gap-1.5 text-cyan-300">
               <Tag className="w-3.5 h-3.5" />
-              <span>Matched Broker Epic:</span>
+              <span>Broker Epic:</span>
               <span className="font-bold font-mono px-1.5 py-0.5 rounded bg-cyan-900/60 text-cyan-200 border border-cyan-700/60">
                 {brokerEpic}
               </span>
@@ -277,7 +301,46 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
             )}
           </div>
 
-          {/* Entry Price & Volume */}
+          {/* Risk Percentage of Equity Selector */}
+          <div className="bg-slate-950/90 border border-cyan-900/50 rounded p-2.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-cyan-300 font-bold uppercase flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+                Risk % of Capital
+              </span>
+              <span className="text-[11px] font-bold text-amber-300 tabular-nums">
+                Risk Capital: ${riskMetrics.riskCapitalUsd.toFixed(2)} ({riskPct}% of ${liveEquity.toLocaleString()})
+              </span>
+            </div>
+            <div className="grid grid-cols-5 gap-1.5">
+              {RISK_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setRiskPct(preset)}
+                  className={`py-1 rounded font-bold text-[11px] border transition-colors cursor-pointer ${
+                    riskPct === preset
+                      ? 'bg-cyan-500 text-slate-950 border-cyan-400'
+                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  {preset}%
+                </button>
+              ))}
+              <input
+                type="number"
+                step="0.1"
+                min="0.1"
+                max="10"
+                value={riskPct}
+                onChange={(e) => setRiskPct(Math.max(0.1, Math.min(10, parseFloat(e.target.value) || 1.0)))}
+                className="bg-slate-900 border border-slate-700 px-1.5 py-1 rounded text-center text-cyan-300 font-bold tabular-nums focus:outline-none focus:border-cyan-500"
+                title="Custom Risk %"
+              />
+            </div>
+          </div>
+
+          {/* Entry Price & Auto-Calculated Risk Volume */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-[10px] text-slate-400 block mb-1 uppercase">
@@ -292,15 +355,15 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
               />
             </div>
             <div>
-              <label className="text-[10px] text-slate-400 block mb-1 uppercase">
-                Volume / Units (Min: {brokerDetails.minLot})
+              <label className="text-[10px] text-cyan-300 block mb-1 uppercase font-semibold">
+                Risk-Sized Qty (Min: {brokerDetails.minLot})
               </label>
               <input
                 type="number"
                 step="any"
                 value={units}
                 onChange={(e) => setUnits(parseFloat(e.target.value) || 0)}
-                className="w-full bg-slate-900 border border-slate-800 px-3 py-2 rounded text-slate-200 font-bold tabular-nums focus:outline-none focus:border-cyan-500/50"
+                className="w-full bg-slate-900 border border-cyan-800/70 px-3 py-2 rounded text-cyan-300 font-bold tabular-nums focus:outline-none focus:border-cyan-500"
               />
             </div>
           </div>
@@ -329,25 +392,33 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
             </div>
           </div>
 
-          {/* Risk-Reward Telemetry Badge */}
-          <div className="bg-slate-950/80 p-2.5 rounded border border-slate-800 flex items-center justify-between">
-            <span className="text-slate-400">Calculated R:R Ratio:</span>
-            <div className="flex items-center gap-1.5">
-              <span
-                className={`font-black tabular-nums text-sm ${
-                  isRRCompliant ? 'text-emerald-400' : 'text-rose-400'
-                }`}
-              >
-                1 : {calculatedRR.toFixed(2)}
-              </span>
-              <span
-                className={`text-[9px] px-1.5 py-0.2 rounded font-bold ${
-                  isRRCompliant
-                    ? 'bg-emerald-500/20 text-emerald-300'
-                    : 'bg-rose-500/20 text-rose-300'
-                }`}
-              >
-                {isRRCompliant ? 'APPROVED (>=1.5)' : 'BELOW 1.5 GATE'}
+          {/* Risk-Reward & Effective Risk Telemetry Badge */}
+          <div className="bg-slate-950/80 p-2.5 rounded border border-slate-800 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Calculated R:R Ratio:</span>
+              <div className="flex items-center gap-1.5">
+                <span
+                  className={`font-black tabular-nums text-sm ${
+                    isRRCompliant ? 'text-emerald-400' : 'text-rose-400'
+                  }`}
+                >
+                  1 : {calculatedRR.toFixed(2)}
+                </span>
+                <span
+                  className={`text-[9px] px-1.5 py-0.2 rounded font-bold ${
+                    isRRCompliant
+                      ? 'bg-emerald-500/20 text-emerald-300'
+                      : 'bg-rose-500/20 text-rose-300'
+                  }`}
+                >
+                  {isRRCompliant ? 'APPROVED (>=1.5)' : 'BELOW 1.5 GATE'}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-900">
+              <span>Effective SL Risk:</span>
+              <span className="text-slate-200 font-bold tabular-nums">
+                ${riskMetrics.effectiveRiskUsd.toFixed(2)} ({riskMetrics.effectiveRiskPct}% of Equity)
               </span>
             </div>
           </div>
@@ -360,7 +431,7 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
           )}
 
           {/* Submit CTA */}
-          <div className="pt-2">
+          <div className="pt-1">
             <button
               type="submit"
               disabled={isSubmitting || !isRRCompliant}
@@ -374,7 +445,7 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
               <span>
                 {isSubmitting
                   ? 'DISPATCHING TO BROKER...'
-                  : `DISPATCH ${direction} TO ${activeBroker.name.toUpperCase()} (${brokerEpic})`}
+                  : `EXECUTE ${direction} (${units} UNITS @ ${riskPct}% RISK)`}
               </span>
             </button>
           </div>
@@ -383,3 +454,4 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
     </div>
   );
 };
+

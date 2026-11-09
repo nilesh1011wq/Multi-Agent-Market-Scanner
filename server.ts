@@ -499,8 +499,12 @@ async function startServer() {
   app.get('/api/broker/account', async (_req, res) => {
     try {
       const { brokerManager } = await import('./src/broker/brokerManager');
-      const summary = await brokerManager.getActiveAccountSummary();
-      res.json({ success: true, summary });
+      const [summary, positions, closedPositions] = await Promise.all([
+        brokerManager.getActiveAccountSummary(),
+        brokerManager.getActiveOpenPositions(),
+        brokerManager.getActiveClosedPositions(),
+      ]);
+      res.json({ success: true, summary, positions, closedPositions });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -509,9 +513,15 @@ async function startServer() {
   app.post('/api/broker/sync-balance', async (_req, res) => {
     try {
       const { brokerManager } = await import('./src/broker/brokerManager');
-      const summary = await brokerManager.getActiveAccountSummary();
-      const positions = await brokerManager.getActiveOpenPositions();
-      res.json({ success: true, summary, positions });
+      // Run breakeven check on open positions during sync
+      await brokerManager.manageOpenPositionsBreakeven();
+      const [summary, positions, closedPositions] = await Promise.all([
+        brokerManager.getActiveAccountSummary(),
+        brokerManager.getActiveOpenPositions(),
+        brokerManager.getActiveClosedPositions(),
+      ]);
+      const logs = brokerManager.getAuditLogs();
+      res.json({ success: true, summary, positions, closedPositions, logs });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -527,12 +537,33 @@ async function startServer() {
     }
   });
 
+  app.get('/api/broker/closed-positions', async (_req, res) => {
+    try {
+      const { brokerManager } = await import('./src/broker/brokerManager');
+      const closedPositions = await brokerManager.getActiveClosedPositions();
+      res.json({ success: true, closedPositions });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.post('/api/broker/order', async (req, res) => {
     try {
       const { order } = req.body;
       const { brokerManager } = await import('./src/broker/brokerManager');
       const result = await brokerManager.executeManualOrder(order);
       res.json({ success: true, result });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/broker/breakeven', async (req, res) => {
+    try {
+      const { brokerId, ticketId } = req.body;
+      const { brokerManager } = await import('./src/broker/brokerManager');
+      const result = await brokerManager.movePositionToBreakeven(brokerId, ticketId);
+      res.json({ ...result });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -603,16 +634,23 @@ async function startServer() {
       }
     }, SCAN_INTERVAL_MS);
 
-    // 2. Autonomous Paper Trading & Price Tick Simulator Loop (every 30 seconds)
+    // 2. Autonomous Broker Position Sync, Breakeven Manager & Paper Trading Loop (every 30 seconds)
     const TICK_INTERVAL_MS = 30 * 1000;
     setInterval(async () => {
       try {
+        const { brokerManager } = await import('./src/broker/brokerManager');
+        await brokerManager.manageOpenPositionsBreakeven();
+        await brokerManager.getActiveAccountSummary();
+
         const { paperTrader } = await import('./src/backtest/paperTrader');
         const active = paperTrader.getOpenPositions();
         if (active.length > 0) {
           const res = await paperTrader.simulateMarketTick();
           if (res.resolved.length > 0) {
-            console.log(`[24/7 Paper Trader] Resolved ${res.resolved.length} position(s):`, res.resolved.map(p => `${p.symbol} ${p.status} (${p.realizedPnLR}R)`));
+            console.log(
+              `[24/7 Paper Trader] Resolved ${res.resolved.length} position(s):`,
+              res.resolved.map((p) => `${p.symbol} ${p.status} (${p.realizedPnLR}R)`)
+            );
           }
         }
       } catch (err: any) {
@@ -637,3 +675,4 @@ async function startServer() {
 startServer().catch((err) => {
   console.error('[Quant Market Scanner] Failed to start server:', err);
 });
+
