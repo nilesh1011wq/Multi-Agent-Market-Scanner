@@ -632,6 +632,7 @@ async function startServer() {
       }
     }, 10000);
   });
+}
 
 startServer().catch((err) => {
   console.error('[Quant Market Scanner] Failed to start server:', err);
