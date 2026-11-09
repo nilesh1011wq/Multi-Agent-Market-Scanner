@@ -20,6 +20,7 @@ export class CapitalComAdapter implements IBrokerAdapter {
   private liveAccountInfo: any = null;
   private liveAccountId: string | null = null;
   private liveCurrency = 'USD';
+  private isManuallyDisconnected = false;
 
   private simulatedPositions: BrokerPosition[] = [];
   private simulatedBalance = 15000;
@@ -79,6 +80,13 @@ export class CapitalComAdapter implements IBrokerAdapter {
    * Proactively refreshes tokens if the session is older than 8 minutes.
    */
   public async ensureSession(): Promise<{ connected: boolean; message: string; accountInfo?: any }> {
+    if (this.isManuallyDisconnected) {
+      return {
+        connected: false,
+        message: 'Broker manually disconnected. Reconnect in broker settings.',
+      };
+    }
+
     const { apiKey, apiSecret, identifier, environment, hasValidCreds } = this.resolveCredentials();
 
     if (!hasValidCreds) {
@@ -156,6 +164,7 @@ export class CapitalComAdapter implements IBrokerAdapter {
   }
 
   public async connect(config: BrokerConfig): Promise<{ success: boolean; latencyMs: number; message: string }> {
+    this.isManuallyDisconnected = false;
     this.currentConfig = config;
     const startTime = Date.now();
 
@@ -192,12 +201,35 @@ export class CapitalComAdapter implements IBrokerAdapter {
   }
 
   public async disconnect(): Promise<void> {
+    this.isManuallyDisconnected = true;
     this.cstToken = null;
     this.xSecurityToken = null;
     this.sessionCreatedAt = 0;
+    this.liveAccountInfo = null;
+    this.liveAccountId = null;
   }
 
   public async getAccountSummary(): Promise<BrokerAccountSummary> {
+    if (this.isManuallyDisconnected) {
+      return {
+        brokerId: 'CAPITAL_COM',
+        brokerName: 'Capital.com',
+        environment: this.currentConfig?.environment || 'DEMO',
+        currency: this.liveCurrency || 'USD',
+        balance: this.simulatedBalance,
+        equity: this.simulatedBalance,
+        marginUsed: 0,
+        marginFree: this.simulatedBalance,
+        marginLevelPct: 999,
+        unrealizedPnL: 0,
+        openPositionsCount: 0,
+        isConnected: false,
+        lastSyncedAt: Date.now(),
+        isRealBrokerAccount: false,
+        accountSource: 'CALIBRATED_SANDBOX',
+      };
+    }
+
     const { apiKey, environment } = this.resolveCredentials();
     const sess = await this.ensureSession();
 

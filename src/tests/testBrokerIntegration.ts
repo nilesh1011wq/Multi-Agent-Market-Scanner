@@ -199,8 +199,31 @@ async function runBrokerTests() {
     console.log(`   ${sym.padEnd(8)}: Price=${q.price}, Bid=${q.bid}, Ask=${q.ask}, Source=${q.source}`);
   }
 
+  // 13. Test Disconnect Broker and Verify Status Update
+  console.log('\n13. Testing POST /api/broker/disconnect...');
+  const dcRes = await fetch(`${baseUrl}/api/broker/disconnect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ brokerId: 'CAPITAL_COM' }),
+  });
+  assert(dcRes.ok, 'POST /api/broker/disconnect returned 200 OK');
+  const dcData = await dcRes.json();
+  assert(dcData.success === true, 'Capital.com broker disconnected successfully');
+
+  const confAfterDc = await fetch(`${baseUrl}/api/broker/configs`);
+  const confAfterDcData = await confAfterDc.json();
+  assert(confAfterDcData.configs.CAPITAL_COM.status === 'DISCONNECTED', 'Capital.com status verified as DISCONNECTED');
+
+  // Reconnect so broker is restored
+  const reconnRes = await fetch(`${baseUrl}/api/broker/connect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ brokerId: 'CAPITAL_COM' }),
+  });
+  assert(reconnRes.ok, 'Reconnect returned 200 OK');
+
   console.log('\n======================================================');
-  console.log('🌟 ALL 15 MULTI-BROKER GATEWAY & PRICE TESTS PASSED 100% 🌟');
+  console.log('🌟 ALL MULTI-BROKER GATEWAY & DISCONNECT TESTS PASSED 100% 🌟');
   console.log('======================================================\n');
 }
 

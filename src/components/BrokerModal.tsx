@@ -26,6 +26,7 @@ interface BrokerModalProps {
   activeBrokerId: BrokerId;
   onSaveConfig: (brokerId: BrokerId, updated: Partial<BrokerConfig>) => Promise<void>;
   onConnectBroker: (brokerId: BrokerId) => Promise<{ success: boolean; latencyMs: number; message: string }>;
+  onDisconnectBroker?: (brokerId: BrokerId) => Promise<any>;
   onSelectActiveBroker: (brokerId: BrokerId) => Promise<void>;
   onToggleAutoExecution: (enabled: boolean) => Promise<void>;
 }
@@ -37,6 +38,7 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
   activeBrokerId,
   onSaveConfig,
   onConnectBroker,
+  onDisconnectBroker,
   onSelectActiveBroker,
   onToggleAutoExecution,
 }) => {
@@ -47,6 +49,7 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
     IG: {},
   });
   const [isTesting, setIsTesting] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isSyncingBalance, setIsSyncingBalance] = useState(false);
   const [syncBalanceResult, setSyncBalanceResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -130,6 +133,26 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
 
   const handleMakeActive = async () => {
     await onSelectActiveBroker(selectedTab);
+  };
+
+  const handleDisconnect = async () => {
+    if (!onDisconnectBroker) return;
+    setIsDisconnecting(true);
+    setTestResult(null);
+    try {
+      const res = await onDisconnectBroker(selectedTab);
+      setTestResult({
+        success: true,
+        message: `${configs[selectedTab]?.name || 'Broker'} disconnected successfully.`,
+      });
+    } catch (err: any) {
+      setTestResult({
+        success: false,
+        message: err.message || 'Failed to disconnect broker.',
+      });
+    } finally {
+      setIsDisconnecting(false);
+    }
   };
 
   const isCurrentActive = activeBrokerId === selectedTab;
@@ -249,28 +272,42 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
               </p>
             </div>
 
-            {/* DEMO vs LIVE segmented toggle */}
-            <div className="flex items-center gap-1 bg-slate-950 p-1 rounded border border-slate-800 shrink-0">
-              <button
-                onClick={() => handleFieldChange('environment', 'DEMO')}
-                className={`px-3 py-1.5 rounded font-bold transition-colors cursor-pointer ${
-                  (activeForm.environment ?? currentBroker.environment) === 'DEMO'
-                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                DEMO / PRACTICE
-              </button>
-              <button
-                onClick={() => handleFieldChange('environment', 'LIVE')}
-                className={`px-3 py-1.5 rounded font-bold transition-colors cursor-pointer ${
-                  (activeForm.environment ?? currentBroker.environment) === 'LIVE'
-                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                LIVE ACCOUNT
-              </button>
+            {/* DEMO vs LIVE segmented toggle & Disconnect button */}
+            <div className="flex items-center gap-2 shrink-0">
+              {currentBroker.status === 'CONNECTED' && onDisconnectBroker && (
+                <button
+                  onClick={handleDisconnect}
+                  disabled={isDisconnecting}
+                  className="px-2.5 py-1.5 text-xs bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded font-semibold flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50"
+                  title="Disconnect broker session"
+                >
+                  <Power className="w-3.5 h-3.5 text-rose-400" />
+                  <span>{isDisconnecting ? 'DISCONNECTING...' : 'DISCONNECT'}</span>
+                </button>
+              )}
+
+              <div className="flex items-center gap-1 bg-slate-950 p-1 rounded border border-slate-800">
+                <button
+                  onClick={() => handleFieldChange('environment', 'DEMO')}
+                  className={`px-3 py-1.5 rounded font-bold transition-colors cursor-pointer ${
+                    (activeForm.environment ?? currentBroker.environment) === 'DEMO'
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  DEMO / PRACTICE
+                </button>
+                <button
+                  onClick={() => handleFieldChange('environment', 'LIVE')}
+                  className={`px-3 py-1.5 rounded font-bold transition-colors cursor-pointer ${
+                    (activeForm.environment ?? currentBroker.environment) === 'LIVE'
+                      ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  LIVE ACCOUNT
+                </button>
+              </div>
             </div>
           </div>
 
@@ -557,6 +594,17 @@ export const BrokerModal: React.FC<BrokerModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            {currentBroker.status === 'CONNECTED' && onDisconnectBroker && (
+              <button
+                onClick={handleDisconnect}
+                disabled={isDisconnecting}
+                className="px-3.5 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded font-semibold transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <Power className="w-3.5 h-3.5 text-rose-400" />
+                <span>{isDisconnecting ? 'DISCONNECTING...' : 'DISCONNECT BROKER'}</span>
+              </button>
+            )}
+
             {!isCurrentActive && (
               <button
                 onClick={handleMakeActive}

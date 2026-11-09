@@ -25,6 +25,7 @@ import {
   Tag,
   Radio,
   ExternalLink,
+  Power,
 } from 'lucide-react';
 
 interface LiveBrokerPositionsPanelProps {
@@ -38,6 +39,7 @@ interface LiveBrokerPositionsPanelProps {
   onFlattenAll: () => Promise<void>;
   onOpenBrokerSettings: () => void;
   onOpenManualTicket?: (symbol?: string) => void;
+  onDisconnectBroker?: (brokerId: any) => Promise<any>;
 }
 
 export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> = ({
@@ -51,9 +53,11 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
   onFlattenAll,
   onOpenBrokerSettings,
   onOpenManualTicket,
+  onDisconnectBroker,
 }) => {
   const [closingTicketId, setClosingTicketId] = useState<string | null>(null);
   const [isFlattening, setIsFlattening] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [confirmFlatten, setConfirmFlatten] = useState(false);
   const [quotes, setQuotes] = useState<Record<string, any>>({});
   const [symbolFilter, setSymbolFilter] = useState('');
@@ -101,6 +105,16 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
       setConfirmFlatten(false);
     } finally {
       setIsFlattening(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    if (!onDisconnectBroker) return;
+    setIsDisconnecting(true);
+    try {
+      await onDisconnectBroker(activeBroker.id);
+    } finally {
+      setIsDisconnecting(false);
     }
   };
 
@@ -178,6 +192,18 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
               <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
               <span>SYNC BROKER</span>
             </button>
+
+            {activeBroker.status === 'CONNECTED' && onDisconnectBroker && (
+              <button
+                onClick={handleDisconnect}
+                disabled={isDisconnecting}
+                title="Disconnect active broker session"
+                className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded font-semibold transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <Power className="w-3.5 h-3.5 text-rose-400" />
+                <span>{isDisconnecting ? 'DISCONNECTING...' : 'DISCONNECT'}</span>
+              </button>
+            )}
 
             {positions.length > 0 && (
               <button

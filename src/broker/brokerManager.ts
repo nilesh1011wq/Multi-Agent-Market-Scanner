@@ -98,6 +98,23 @@ class BrokerManager {
     }
   }
 
+  public async disconnectBroker(id: BrokerId): Promise<{ success: boolean; message: string }> {
+    const adapter = this.adapters[id];
+    try {
+      if (adapter) {
+        await adapter.disconnect();
+      }
+      brokerVault.updateConfig(id, {
+        status: 'DISCONNECTED',
+        latencyMs: undefined,
+        errorMessage: undefined,
+      });
+      return { success: true, message: `Broker ${id} disconnected successfully.` };
+    } catch (err: any) {
+      return { success: false, message: `Failed to disconnect broker: ${err.message}` };
+    }
+  }
+
   public async getActiveAccountSummary(): Promise<BrokerAccountSummary> {
     const adapter = this.getActiveAdapter();
     return adapter.getAccountSummary();

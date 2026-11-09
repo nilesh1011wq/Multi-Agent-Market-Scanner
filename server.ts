@@ -460,6 +460,17 @@ async function startServer() {
     }
   });
 
+  app.post('/api/broker/disconnect', async (req, res) => {
+    try {
+      const { brokerId } = req.body;
+      const { brokerManager } = await import('./src/broker/brokerManager');
+      const result = await brokerManager.disconnectBroker(brokerId);
+      res.json({ ...result });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.post('/api/broker/select-active', async (req, res) => {
     try {
       const { brokerId } = req.body;

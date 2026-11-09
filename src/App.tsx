@@ -338,6 +338,24 @@ export default function App() {
     return res.data || { success: res.success, latencyMs: 0, message: res.error || 'Connection failed' };
   };
 
+  const handleDisconnectBroker = async (brokerId: BrokerId) => {
+    const res = await safeFetchJson('/api/broker/disconnect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ brokerId }),
+    });
+    setBrokerConfigs((prev) => ({
+      ...prev,
+      [brokerId]: {
+        ...prev[brokerId],
+        status: 'DISCONNECTED',
+        latencyMs: undefined,
+      },
+    }));
+    await refreshBrokerData();
+    return res.data || { success: res.success, message: res.error || 'Broker disconnected.' };
+  };
+
   const handleSelectActiveBroker = async (brokerId: BrokerId) => {
     const res = await safeFetchJson('/api/broker/select-active', {
       method: 'POST',
@@ -847,6 +865,7 @@ export default function App() {
                   if (sym) setActiveSymbol(sym);
                   setIsOrderTicketOpen(true);
                 }}
+                onDisconnectBroker={handleDisconnectBroker}
               />
             </div>
           )}
@@ -1016,6 +1035,7 @@ export default function App() {
         activeBrokerId={activeBrokerId}
         onSaveConfig={handleSaveBrokerConfig}
         onConnectBroker={handleConnectBroker}
+        onDisconnectBroker={handleDisconnectBroker}
         onSelectActiveBroker={handleSelectActiveBroker}
         onToggleAutoExecution={handleToggleAutoExecution}
       />
