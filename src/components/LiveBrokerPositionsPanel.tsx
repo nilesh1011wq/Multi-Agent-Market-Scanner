@@ -631,11 +631,57 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
         )}
 
         {positions.length === 0 ? (
-          <div className="p-8 text-center text-slate-500 space-y-1">
-            <p className="font-semibold text-slate-400">No open positions on {activeBroker.name}</p>
-            <p className="text-[11px]">
-              Orders dispatched via Chief Arbiter, the manual order ticket, or directly inside your {activeBroker.name} account will appear here in real-time.
-            </p>
+          <div className="p-8 text-center text-slate-500 space-y-3">
+            {!accountSummary?.isRealBrokerAccount ? (
+              <div className="max-w-md mx-auto space-y-2">
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20 text-xs font-bold">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  <span>LOCAL SANDBOX MODE ACTIVE</span>
+                </div>
+                <p className="font-semibold text-slate-300 text-sm">
+                  No open simulated positions in sandbox
+                </p>
+                <p className="text-[11px] text-slate-400 leading-relaxed font-sans">
+                  The terminal is currently running in local simulation mode. Trades you opened directly on your Capital.com app or web account live in Capital.com's cloud and require your API Key and email to sync.
+                </p>
+                <div className="pt-2 flex items-center justify-center gap-3">
+                  <button
+                    onClick={onOpenBrokerSettings}
+                    className="px-3.5 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded text-xs transition-colors cursor-pointer shadow-sm flex items-center gap-1.5"
+                  >
+                    <Zap className="w-3.5 h-3.5 fill-current" />
+                    <span>LINK CAPITAL.COM DEMO (SYNC LIVE)</span>
+                  </button>
+                  {onOpenManualTicket && (
+                    <button
+                      onClick={() => onOpenManualTicket('EURUSD')}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-semibold transition-colors cursor-pointer"
+                    >
+                      OPEN ORDER TICKET
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="max-w-md mx-auto space-y-2">
+                <p className="font-semibold text-slate-300 text-sm">
+                  No open positions on {activeBroker.name} ({accountSummary.environment} account)
+                </p>
+                <p className="text-[11px] text-slate-400 leading-relaxed font-sans">
+                  Account is actively linked with {activeBroker.name} API. New orders dispatched via Chief Arbiter, the manual ticket, or your Capital.com platform will appear here in real-time.
+                </p>
+                <div className="pt-1">
+                  <button
+                    onClick={onRefresh}
+                    disabled={isLoading}
+                    className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded text-xs font-bold transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
+                    <span>FORCE SYNC POSITIONS</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="overflow-x-auto">

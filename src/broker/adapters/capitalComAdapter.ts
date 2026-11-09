@@ -508,24 +508,32 @@ export class CapitalComAdapter implements IBrokerAdapter {
 
         if (res.ok) {
           const data = await res.json();
-          if (Array.isArray(data.positions)) {
+          const rawPositions = Array.isArray(data.positions)
+            ? data.positions
+            : Array.isArray(data)
+            ? data
+            : [];
+          if (rawPositions.length >= 0 && (Array.isArray(data.positions) || Array.isArray(data))) {
             const currentTickets = new Set<string>();
-            const livePositions: BrokerPosition[] = data.positions.map((item: any) => {
-              const pos = item.position || {};
-              const mkt = item.market || {};
-              const ticketId = String(pos.dealId || pos.dealReference);
+            const livePositions: BrokerPosition[] = rawPositions.map((item: any) => {
+              const pos = item.position || item;
+              const mkt = item.market || item;
+              const ticketId = String(
+                pos.dealId || pos.dealReference || item.dealId || item.dealReference || `CAP-${Date.now()}`
+              );
               currentTickets.add(ticketId);
 
-              const termSymbol = getTerminalSymbolFromBroker(pos.epic || 'EURUSD', 'CAPITAL_COM');
-              const direction: 'BUY' | 'SELL' = pos.direction === 'SELL' ? 'SELL' : 'BUY';
-              const units = Number(pos.size) || 0;
-              const openPrice = Number(pos.level) || 0;
+              const rawEpic = pos.epic || item.epic || mkt.epic || 'EURUSD';
+              const termSymbol = getTerminalSymbolFromBroker(rawEpic, 'CAPITAL_COM');
+              const direction: 'BUY' | 'SELL' = (pos.direction === 'SELL' || item.direction === 'SELL') ? 'SELL' : 'BUY';
+              const units = Number(pos.size ?? item.size) || 0;
+              const openPrice = Number(pos.level ?? item.level ?? pos.openLevel ?? item.openLevel) || 0;
               const currentPrice =
                 direction === 'BUY'
-                  ? Number(mkt.bid) || openPrice
-                  : Number(mkt.offer ?? mkt.ask) || openPrice;
-              const stopLoss = pos.stopLevel ? Number(pos.stopLevel) : 0;
-              const takeProfit = pos.profitLevel ? Number(pos.profitLevel) : 0;
+                  ? Number(mkt.bid ?? pos.bid) || openPrice
+                  : Number(mkt.offer ?? mkt.ask ?? pos.offer ?? pos.ask) || openPrice;
+              const stopLoss = pos.stopLevel ? Number(pos.stopLevel) : item.stopLevel ? Number(item.stopLevel) : 0;
+              const takeProfit = pos.profitLevel ? Number(pos.profitLevel) : item.profitLevel ? Number(item.profitLevel) : 0;
 
               const meta = this.positionMeta.get(ticketId);
               const refStop = meta?.initialStopLoss || stopLoss;
