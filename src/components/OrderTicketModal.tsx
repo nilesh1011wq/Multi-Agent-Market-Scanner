@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { BrokerAccountSummary, BrokerConfig, StandardizedOrderRequest } from '../types/broker';
+import { BrokerAccountSummary, BrokerConfig, BrokerPosition, StandardizedOrderRequest } from '../types/broker';
 import { WATCHLIST } from '../data/marketDataService';
 import {
   getBrokerSymbol,
   getBrokerSymbolDetails,
   calculateRiskBasedOrderMetrics,
+  getInstrumentDefinition,
+  getTerminalSymbolFromBroker,
 } from '../broker/symbolMapper';
 import {
   X,
@@ -14,6 +16,7 @@ import {
   Tag,
   Radio,
   ShieldCheck,
+  ShieldAlert,
 } from 'lucide-react';
 
 interface OrderTicketModalProps {
@@ -21,6 +24,7 @@ interface OrderTicketModalProps {
   onClose: () => void;
   activeBroker: BrokerConfig;
   accountSummary?: BrokerAccountSummary | null;
+  existingPositions?: BrokerPosition[];
   defaultSymbol?: string;
   defaultDirection?: 'BUY' | 'SELL';
   defaultEntryPrice?: number;
@@ -36,6 +40,7 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
   onClose,
   activeBroker,
   accountSummary,
+  existingPositions = [],
   defaultSymbol = 'EURUSD',
   defaultDirection = 'BUY',
   defaultEntryPrice,
@@ -168,6 +173,12 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
 
   if (!isOpen) return null;
 
+  const canonicalSelectedSymbol = getTerminalSymbolFromBroker(symbol, activeBroker.id);
+  const existingPosition = existingPositions.find(
+    (p) => getTerminalSymbolFromBroker(p.symbol, p.brokerId) === canonicalSelectedSymbol
+  );
+  const isDuplicateSymbol = !!existingPosition;
+
   const isDirectionValid =
     direction === 'BUY'
       ? entryPrice > 0 && stopLoss < entryPrice && takeProfit > entryPrice
@@ -181,6 +192,13 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
+
+    if (isDuplicateSymbol && existingPosition) {
+      setErrorMsg(
+        `Order blocked: Position #${existingPosition.brokerTicketId} is already open on ${canonicalSelectedSymbol}. Strict 1 trade per instrument rule enforced.`
+      );
+      return;
+    }
 
     if (!isDirectionValid) {
       setErrorMsg(
@@ -462,6 +480,18 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
             </div>
           </div>
 
+          {isDuplicateSymbol && existingPosition && (
+            <div className="p-3 rounded-lg bg-rose-950/50 border border-rose-500/60 text-rose-300 text-[11px] flex items-start gap-2.5">
+              <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-bold text-rose-200">1 Trade Per Instrument Limit Enforced</div>
+                <p className="mt-0.5 text-rose-300/80 leading-relaxed font-sans">
+                  Position <span className="font-mono text-rose-100 font-bold">#{existingPosition.brokerTicketId}</span> ({existingPosition.direction} {existingPosition.units.toLocaleString()} units) is currently open on {canonicalSelectedSymbol}. Strict risk management rules permit only 1 trade per instrument. Close the active position before submitting a new order.
+                </p>
+              </div>
+            </div>
+          )}
+
           {errorMsg && (
             <div className="p-2.5 rounded bg-rose-950/40 border border-rose-800 text-rose-300 text-[11px] flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -473,7 +503,7 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
           <div className="pt-1">
             <button
               type="submit"
-              disabled={isSubmitting || !isRRCompliant}
+              disabled={isSubmitting || !isRRCompliant || isDuplicateSymbol}
               className={`w-full py-2.5 rounded font-bold text-slate-950 text-xs transition-all flex items-center justify-center gap-2 cursor-pointer ${
                 direction === 'BUY'
                   ? 'bg-emerald-400 hover:bg-emerald-300 shadow-sm shadow-emerald-500/20'
@@ -484,6 +514,8 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
               <span>
                 {isSubmitting
                   ? 'DISPATCHING TO BROKER...'
+                  : isDuplicateSymbol
+                  ? `DUPLICATE BLOCKED (1 TRADE LIMIT ON ${canonicalSelectedSymbol})`
                   : `EXECUTE ${direction} (${units} UNITS @ ${riskPct}% RISK)`}
               </span>
             </button>

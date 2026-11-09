@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   BrokerAccountSummary,
   BrokerClosedPosition,
@@ -6,7 +6,12 @@ import {
   BrokerPosition,
 } from '../types/broker';
 import { ExecutionAuditLog } from '../broker/brokerManager';
-import { ALL_INSTRUMENTS, InstrumentDefinition, getBrokerSymbol } from '../broker/symbolMapper';
+import {
+  ALL_INSTRUMENTS,
+  InstrumentDefinition,
+  getBrokerSymbol,
+  getTerminalSymbolFromBroker,
+} from '../broker/symbolMapper';
 import {
   Globe,
   TrendingUp,
@@ -28,6 +33,7 @@ import {
   Radio,
   ExternalLink,
   Power,
+  Trash2,
 } from 'lucide-react';
 
 interface LiveBrokerPositionsPanelProps {
@@ -40,6 +46,7 @@ interface LiveBrokerPositionsPanelProps {
   onRefresh: () => void;
   onClosePosition: (ticketId: string) => Promise<void>;
   onMoveToBreakeven?: (ticketId: string) => Promise<void>;
+  onCloseDuplicates?: () => Promise<void>;
   onFlattenAll: () => Promise<void>;
   onOpenBrokerSettings: () => void;
   onOpenManualTicket?: (symbol?: string) => void;
@@ -56,6 +63,7 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
   onRefresh,
   onClosePosition,
   onMoveToBreakeven,
+  onCloseDuplicates,
   onFlattenAll,
   onOpenBrokerSettings,
   onOpenManualTicket,
@@ -65,9 +73,55 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
   const [beTicketId, setBeTicketId] = useState<string | null>(null);
   const [isFlattening, setIsFlattening] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [isCleaningDuplicates, setIsCleaningDuplicates] = useState(false);
   const [confirmFlatten, setConfirmFlatten] = useState(false);
   const [quotes, setQuotes] = useState<Record<string, any>>({});
   const [symbolFilter, setSymbolFilter] = useState('');
+
+  // Group positions by canonical terminal symbol to detect duplicates
+  const positionsBySymbol = useMemo(() => {
+    const map = new Map<string, BrokerPosition[]>();
+    for (const pos of positions) {
+      const canonical = getTerminalSymbolFromBroker(pos.symbol, pos.brokerId);
+      if (!map.has(canonical)) map.set(canonical, []);
+      map.get(canonical)!.push(pos);
+    }
+    return map;
+  }, [positions]);
+
+  const duplicateGroups = useMemo(() => {
+    const dups: { symbol: string; count: number; positions: BrokerPosition[] }[] = [];
+    positionsBySymbol.forEach((posList, sym) => {
+      if (posList.length > 1) {
+        dups.push({ symbol: sym, count: posList.length, positions: posList });
+      }
+    });
+    return dups;
+  }, [positionsBySymbol]);
+
+  const hasDuplicates = duplicateGroups.length > 0;
+  const totalExtraDuplicates = duplicateGroups.reduce((acc, g) => acc + (g.count - 1), 0);
+
+  const handleCleanDuplicates = async () => {
+    setIsCleaningDuplicates(true);
+    try {
+      if (onCloseDuplicates) {
+        await onCloseDuplicates();
+      } else {
+        const res = await fetch('/api/broker/close-duplicates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brokerId: activeBroker.id }),
+        });
+        await res.json();
+        onRefresh();
+      }
+    } catch (e) {
+      console.error('Failed to clean up duplicates:', e);
+    } finally {
+      setIsCleaningDuplicates(false);
+    }
+  };
 
   // Fetch real live quotes for the 15 assets table
   useEffect(() => {
@@ -520,11 +574,61 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
             <span className="font-bold text-slate-200 uppercase tracking-wide">
               Active Broker Positions ({positions.length})
             </span>
+            {hasDuplicates && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                {totalExtraDuplicates} DUPLICATES
+              </span>
+            )}
           </div>
-          <span className="text-[10px] text-slate-500">
-            Live positions synced 100% with {activeBroker.name} · Auto-Breakeven at +1.0R
-          </span>
+          <div className="flex items-center gap-3">
+            {hasDuplicates && (
+              <button
+                onClick={handleCleanDuplicates}
+                disabled={isCleaningDuplicates}
+                className="px-2.5 py-1 bg-rose-500 hover:bg-rose-400 text-slate-950 font-bold rounded text-[10px] transition-colors cursor-pointer shadow-sm shadow-rose-500/20 flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Trash2 className="w-3 h-3" />
+                <span>{isCleaningDuplicates ? 'CLEANING UP...' : 'CLEAN UP DUPLICATES'}</span>
+              </button>
+            )}
+            <span className="text-[10px] text-slate-500 hidden sm:inline">
+              Live positions synced 100% with {activeBroker.name} · Auto-Breakeven at +1.0R
+            </span>
+          </div>
         </div>
+
+        {/* Duplicate Positions Alert & Clean Up Banner */}
+        {hasDuplicates && (
+          <div className="p-3 bg-rose-950/40 border-b border-rose-800/80 flex flex-col md:flex-row md:items-center justify-between gap-3 text-rose-200">
+            <div className="flex items-start gap-2.5">
+              <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-xs text-rose-200">
+                    DUPLICATE TRADES DETECTED: 1 TRADE PER INSTRUMENT POLICY VIOLATED
+                  </span>
+                  <span className="text-[9px] px-1.5 py-0.2 rounded font-mono font-bold bg-rose-500/30 text-rose-200 border border-rose-400/50">
+                    {totalExtraDuplicates} EXTRA POSITION{totalExtraDuplicates > 1 ? 'S' : ''}
+                  </span>
+                </div>
+                <p className="text-[11px] text-rose-300/80 mt-0.5 font-sans leading-relaxed">
+                  {duplicateGroups
+                    .map((g) => `${g.symbol} (${g.count} open positions)`)
+                    .join(' · ')}
+                  . Institutional risk rules require strictly 1 trade per instrument across the entire portfolio.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleCleanDuplicates}
+              disabled={isCleaningDuplicates}
+              className="px-3 py-1.5 bg-rose-500 hover:bg-rose-400 text-slate-950 font-bold rounded text-xs transition-colors shrink-0 cursor-pointer shadow-sm shadow-rose-500/20 flex items-center gap-1.5 disabled:opacity-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{isCleaningDuplicates ? 'CLOSING DUPLICATES...' : 'CLEAN UP DUPLICATES (KEEP 1 PER ASSET)'}</span>
+            </button>
+          </div>
+        )}
 
         {positions.length === 0 ? (
           <div className="p-8 text-center text-slate-500 space-y-1">
@@ -561,9 +665,16 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
                     (pos.stopLoss > 0 &&
                       ((pos.direction === 'BUY' && pos.stopLoss >= pos.openPrice) ||
                         (pos.direction === 'SELL' && pos.stopLoss <= pos.openPrice)));
+                  const isDuplicateRow =
+                    (positionsBySymbol.get(getTerminalSymbolFromBroker(pos.symbol, pos.brokerId))?.length || 0) > 1;
 
                   return (
-                    <tr key={pos.brokerTicketId} className="hover:bg-slate-900/30">
+                    <tr
+                      key={pos.brokerTicketId}
+                      className={`hover:bg-slate-900/30 transition-colors ${
+                        isDuplicateRow ? 'bg-rose-950/15' : ''
+                      }`}
+                    >
                       <td className="p-2.5 text-slate-400">
                         <div className="flex items-center gap-1.5">
                           <span>{pos.brokerTicketId}</span>
@@ -578,7 +689,16 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
                           )}
                         </div>
                       </td>
-                      <td className="p-2.5 font-bold text-slate-100">{pos.symbol}</td>
+                      <td className="p-2.5 font-bold text-slate-100">
+                        <div className="flex items-center gap-1.5">
+                          <span>{pos.symbol}</span>
+                          {isDuplicateRow && (
+                            <span className="text-[8px] font-bold px-1.5 py-0.2 rounded bg-rose-500/25 text-rose-300 border border-rose-500/40">
+                              DUPLICATE
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="p-2.5 text-cyan-300 font-semibold">{getBrokerSymbol(pos.symbol, pos.brokerId)}</td>
                       <td className="p-2.5 font-semibold">
                         <span

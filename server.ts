@@ -590,6 +590,17 @@ async function startServer() {
     }
   });
 
+  app.post('/api/broker/close-duplicates', async (req, res) => {
+    try {
+      const { brokerId } = req.body || {};
+      const { brokerManager } = await import('./src/broker/brokerManager');
+      const result = await brokerManager.closeDuplicatePositions(brokerId);
+      res.json({ success: true, ...result });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.get('/api/broker/audit-logs', async (_req, res) => {
     try {
       const { brokerManager } = await import('./src/broker/brokerManager');

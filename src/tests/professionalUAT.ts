@@ -572,7 +572,38 @@ export async function runProfessionalUAT() {
     `Order properly rejected: "${badSellResult.message}"`
   );
 
-  // Check 5: Valid manual order execution
+  // Check 5: Duplicate Position Rejection Guard (Strict 1 Trade Per Instrument)
+  const dupBuyOrder: StandardizedOrderRequest = {
+    brokerId: 'CAPITAL_COM',
+    symbol: 'EURUSD',
+    direction: 'BUY',
+    orderType: 'MARKET',
+    units: 10000,
+    riskPct: 1.0,
+    riskCapitalUsd: 150,
+    entryPrice: 1.11500,
+    stopLoss: 1.11200,
+    takeProfit1: 1.12100,
+    riskReward: 2.0,
+    clientOrderId: `test-dup-buy-${Date.now()}`,
+    source: 'MANUAL_TICKET',
+  };
+  const dupBuyResult = await brokerManager.executeManualOrder(dupBuyOrder);
+  recordTest(
+    'Risk Guard',
+    'Duplicate Position Rejection Guard (1 Trade Per Instrument)',
+    dupBuyResult.success === false && dupBuyResult.status === 'REJECTED' && dupBuyResult.message.includes('already open'),
+    `Order properly rejected: "${dupBuyResult.message}"`
+  );
+
+  // Close previous position so manual order can execute cleanly
+  const prevPositions = await brokerManager.getActiveOpenPositions();
+  const eurPos = prevPositions.find((p) => p.symbol === 'EURUSD');
+  if (eurPos) {
+    await brokerManager.closePosition('CAPITAL_COM', eurPos.brokerTicketId);
+  }
+
+  // Check 6: Valid manual order execution
   const validBuyOrder: StandardizedOrderRequest = {
     brokerId: 'CAPITAL_COM',
     symbol: 'EURUSD',
@@ -596,7 +627,7 @@ export async function runProfessionalUAT() {
     `Ticket #${validOrderResult.brokerTicketId} filled at ${validOrderResult.fillPrice} on ${validOrderResult.brokerId}`
   );
 
-  // Check 6: Move Stop Loss to Breakeven
+  // Check 7: Move Stop Loss to Breakeven
   if (validOrderResult.brokerTicketId) {
     const beResult = await brokerManager.moveToBreakeven('CAPITAL_COM', validOrderResult.brokerTicketId);
     recordTest(
@@ -607,7 +638,16 @@ export async function runProfessionalUAT() {
     );
   }
 
-  // Check 7: Closed positions history tracking
+  // Check 8: 1-Click Clean Up Duplicates Gateway
+  const cleanupRes = await brokerManager.closeDuplicatePositions('CAPITAL_COM');
+  recordTest(
+    'Risk Management',
+    '1-Click Clean Up Duplicates Gateway',
+    cleanupRes.success === true,
+    `Cleanup result: "${cleanupRes.message}" (Closed: ${cleanupRes.closedCount})`
+  );
+
+  // Check 9: Closed positions history tracking
   const closed = await brokerManager.getClosedPositions('CAPITAL_COM');
   recordTest(
     'Broker History',

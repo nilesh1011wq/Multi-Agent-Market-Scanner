@@ -16,6 +16,7 @@ import {
   calculateRiskBasedOrderMetrics,
   getInstrumentDefinition,
   areInstrumentsCorrelated,
+  getTerminalSymbolFromBroker,
 } from './symbolMapper';
 import { ArbiterOutput } from '../types/debate';
 import { FeatureSnapshot } from '../types/market';
@@ -32,11 +33,11 @@ export interface ExecutionAuditLog {
   riskPct?: number;
   riskCapitalUsd?: number;
   entryPrice: number;
-  stopLoss: number;
-  takeProfit: number;
-  riskReward: number;
-  status: 'FILLED' | 'REJECTED' | 'FAILED';
-  source: 'AUTO_ARBITER' | 'MANUAL_TICKET' | 'SCANNER';
+  stopLoss?: number;
+  takeProfit?: number;
+  riskReward?: number;
+  status: 'FILLED' | 'REJECTED' | 'FAILED' | 'CLOSED';
+  source: 'AUTO_ARBITER' | 'MANUAL_TICKET' | 'SCANNER' | 'CLEANUP_DUPLICATES';
   message: string;
 }
 
@@ -325,9 +326,16 @@ class BrokerManager {
       return null;
     }
 
-    // 6b. Duplicate symbol check
-    if (openPositions.some((p) => p.symbol === arbiter.symbol)) {
-      console.log(`[BrokerManager] Symbol ${arbiter.symbol} already has active open position on ${activeConf.name}`);
+    // 6b. Duplicate symbol check (Strict institutional rule: maximum 1 trade per instrument)
+    const targetSymbol = getTerminalSymbolFromBroker(arbiter.symbol, activeConf.id);
+    if (
+      openPositions.some(
+        (p) => getTerminalSymbolFromBroker(p.symbol, p.brokerId) === targetSymbol
+      )
+    ) {
+      console.log(
+        `[BrokerManager] Symbol ${targetSymbol} already has active open position on ${activeConf.name}. Strict 1 trade per instrument rule enforced.`
+      );
       return null;
     }
 
@@ -444,8 +452,6 @@ class BrokerManager {
     const conf = brokerVault.getConfig(order.brokerId);
     const summary = await adapter.getAccountSummary();
 
-    const riskPct = order.riskPct && order.riskPct > 0 ? order.riskPct : conf.defaultRiskPct || 1.0;
-
     // Resolve live entry price if not explicitly set
     let refEntryPrice = order.entryPrice || 0;
     if (!refEntryPrice || refEntryPrice <= 0) {
@@ -493,6 +499,30 @@ class BrokerManager {
         };
       }
     }
+
+    // Strict institutional limit: Maximum 1 open trade per instrument allowed
+    const targetSymbol = getTerminalSymbolFromBroker(order.symbol, order.brokerId);
+    const openPositions = await adapter.getOpenPositions();
+    const existing = openPositions.find(
+      (p) => getTerminalSymbolFromBroker(p.symbol, p.brokerId) === targetSymbol
+    );
+    if (existing) {
+      return {
+        success: false,
+        brokerId: order.brokerId,
+        symbol: order.symbol,
+        direction: order.direction,
+        units: order.units,
+        fillPrice: 0,
+        stopLoss: order.stopLoss,
+        takeProfit: order.takeProfit1,
+        timestamp: Date.now(),
+        status: 'REJECTED',
+        message: `Order rejected: Position on ${targetSymbol} is already open (#${existing.brokerTicketId}). Strict institutional limit: maximum 1 trade per instrument allowed.`,
+      };
+    }
+
+    const riskPct = order.riskPct && order.riskPct > 0 ? order.riskPct : conf.defaultRiskPct || 1.0;
 
     if (refEntryPrice > 0 && order.stopLoss > 0) {
       const metrics = calculateRiskBasedOrderMetrics(
@@ -638,6 +668,87 @@ class BrokerManager {
     const closed = await adapter.getClosedPositions();
     this.syncClosedTradesToBayesianScorecards(closed);
     return res;
+  }
+
+  /**
+   * 1-Click Institutional Clean Up: Detects duplicate positions on the same instrument,
+   * retains strictly 1 position per asset (keeping the newest position active),
+   * and automatically closes all extraneous duplicate trades.
+   */
+  public async closeDuplicatePositions(brokerId?: BrokerId): Promise<{
+    success: boolean;
+    closedCount: number;
+    message: string;
+    closedPositions: { ticketId: string; symbol: string }[];
+  }> {
+    const adapter = brokerId ? (this.adapters[brokerId] || this.getActiveAdapter()) : this.getActiveAdapter();
+    const positions = await adapter.getOpenPositions();
+
+    // Group positions by canonical terminal symbol
+    const grouped = new Map<string, typeof positions>();
+    for (const pos of positions) {
+      const canonical = getTerminalSymbolFromBroker(pos.symbol, pos.brokerId);
+      if (!grouped.has(canonical)) {
+        grouped.set(canonical, []);
+      }
+      grouped.get(canonical)!.push(pos);
+    }
+
+    const closedPositions: { ticketId: string; symbol: string }[] = [];
+    let closedCount = 0;
+
+    for (const [sym, posList] of grouped.entries()) {
+      if (posList.length > 1) {
+        // Sort descending by openedAt to keep the newest position active
+        posList.sort((a, b) => (b.openedAt || 0) - (a.openedAt || 0));
+        const toKeep = posList[0];
+        const duplicatesToClose = posList.slice(1);
+
+        console.log(
+          `[BrokerManager] Duplicate positions detected for ${sym} (${posList.length} trades). Keeping #${toKeep.brokerTicketId}, closing ${duplicatesToClose.length} duplicates.`
+        );
+
+        for (const dup of duplicatesToClose) {
+          try {
+            const res = await adapter.closePosition(dup.brokerTicketId);
+            if (res.success) {
+              closedCount++;
+              closedPositions.push({ ticketId: dup.brokerTicketId, symbol: dup.symbol });
+              this.auditLogs.unshift({
+                id: `audit-cleanup-${Date.now()}-${dup.brokerTicketId}`,
+                timestamp: Date.now(),
+                brokerId: dup.brokerId,
+                symbol: dup.symbol,
+                direction: dup.direction,
+                units: dup.units,
+                entryPrice: dup.openPrice,
+                status: 'CLOSED',
+                source: 'CLEANUP_DUPLICATES',
+                message: `Cleaned up duplicate position #${dup.brokerTicketId} on ${sym}. Strictly 1 trade per instrument enforced.`,
+              });
+            }
+          } catch (err: any) {
+            console.error(`[BrokerManager] Failed to close duplicate #${dup.brokerTicketId}:`, err);
+          }
+        }
+      }
+    }
+
+    // Sync closed positions to Bayesian scorecards immediately if any trades were closed
+    if (closedCount > 0) {
+      const closed = await adapter.getClosedPositions();
+      this.syncClosedTradesToBayesianScorecards(closed);
+    }
+
+    return {
+      success: true,
+      closedCount,
+      message:
+        closedCount > 0
+          ? `Successfully closed ${closedCount} duplicate position(s). Enforced 1 trade per instrument rule.`
+          : 'No duplicate positions found. All open trades are unique per instrument.',
+      closedPositions,
+    };
   }
 }
 

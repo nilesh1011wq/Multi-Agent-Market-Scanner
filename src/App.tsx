@@ -441,6 +441,23 @@ export default function App() {
     }
   };
 
+  const handleCloseDuplicates = async () => {
+    try {
+      const res = await safeFetchJson('/api/broker/close-duplicates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brokerId: activeBrokerId }),
+      });
+      if (res.success && res.data?.success) {
+        setBrokerNotification(res.data.message);
+        setTimeout(() => setBrokerNotification(null), 6000);
+        await refreshBrokerData();
+      }
+    } catch (err) {
+      console.error('Failed to close duplicates:', err);
+    }
+  };
+
 
   const handleSubmitBrokerOrder = async (order: StandardizedOrderRequest) => {
     const res = await safeFetchJson('/api/broker/order', {
@@ -895,6 +912,7 @@ export default function App() {
                 onRefresh={refreshBrokerData}
                 onClosePosition={handleCloseBrokerPosition}
                 onFlattenAll={handleFlattenAllBroker}
+                onCloseDuplicates={handleCloseDuplicates}
                 onMoveToBreakeven={handleMoveBrokerToBreakeven}
                 onOpenBrokerSettings={() => setIsBrokerModalOpen(true)}
                 onOpenManualTicket={(sym) => {
@@ -1098,6 +1116,7 @@ export default function App() {
         onClose={() => setIsOrderTicketOpen(false)}
         activeBroker={brokerConfigs[activeBrokerId] || brokerConfigs.CAPITAL_COM}
         accountSummary={brokerAccountSummary}
+        existingPositions={brokerPositions}
         defaultSymbol={manualTicketState.symbol || activeSymbol}
         defaultDirection={
           manualTicketState.direction ||
