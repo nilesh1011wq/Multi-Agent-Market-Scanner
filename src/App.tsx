@@ -712,7 +712,8 @@ export default function App() {
         testPassed={testPassed}
         oppCount={opportunities.length}
         alertsCount={alerts.length}
-        paperEquity={brokerAccountSummary?.equity || paperSummary?.equity || 15000}
+        paperEquity={paperSummary?.equity || 10000}
+        brokerEquity={brokerAccountSummary?.equity || brokerConfigs[activeBrokerId]?.customStartingBalance || 15000}
         engineMode={engineMode}
         engineMessage={engineMessage}
         activeBrokerName={brokerConfigs[activeBrokerId]?.name || 'Capital.com'}

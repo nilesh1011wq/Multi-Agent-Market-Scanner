@@ -25,6 +25,9 @@ import { scannerService } from '../scheduler/scannerService';
 import { alertService } from '../scheduler/alertService';
 import { paperTrader } from '../backtest/paperTrader';
 import { scorecardService } from '../backtest/scorecards';
+import { brokerManager } from '../broker/brokerManager';
+import { calculateRiskBasedOrderMetrics } from '../broker/symbolMapper';
+import { StandardizedOrderRequest } from '../types/broker';
 import { Timeframe } from '../types/market';
 import { AgentName } from '../types/debate';
 
@@ -480,6 +483,137 @@ export async function runProfessionalUAT() {
     'Test Alert Dispatch',
     testAlert !== null && testAlert.symbol === 'EURUSD' && testAlert.delivered === true,
     `Alert Dispatched: [${testAlert.channel}] ${testAlert.symbol} ${testAlert.direction} (Confidence: ${testAlert.confidence}%, Status: ${testAlert.statusMessage})`
+  );
+
+  // -------------------------------------------------------------------------
+  // 10. INSTITUTIONAL BROKER GATEWAY & RISK POSITION SIZING AUDIT
+  // -------------------------------------------------------------------------
+  console.log('\n--- MODULE 10: INSTITUTIONAL BROKER GATEWAY & RISK SIZING AUDIT ---');
+
+  // Check 1: Risk % position sizing calculation on Forex
+  const metrics1 = calculateRiskBasedOrderMetrics(
+    'EURUSD',
+    'CAPITAL_COM',
+    15000,
+    1.0,
+    1.11500,
+    1.11200,
+    1.12100
+  );
+  recordTest(
+    'Broker Sizing',
+    'EURUSD 1.0% Risk Sizing on $15,000 Equity',
+    metrics1.units > 0 && metrics1.riskCapitalUsd === 150 && metrics1.riskRewardRatio === 2.0,
+    `Units=${metrics1.units}, RiskCapital=$${metrics1.riskCapitalUsd}, StopDist=${metrics1.stopDistance.toFixed(5)}, R:R=${metrics1.riskRewardRatio}`
+  );
+
+  // Check 2: Crypto risk sizing
+  const metricsBtc = calculateRiskBasedOrderMetrics(
+    'BTCUSD',
+    'CAPITAL_COM',
+    15000,
+    1.0,
+    65000,
+    63000,
+    69000
+  );
+  recordTest(
+    'Broker Sizing',
+    'BTCUSD 1.0% Risk Sizing on $15,000 Equity',
+    metricsBtc.units > 0 && metricsBtc.riskCapitalUsd === 150,
+    `Units=${metricsBtc.units}, RiskCapital=$${metricsBtc.riskCapitalUsd}, StopDist=${metricsBtc.stopDistance}`
+  );
+
+  // Check 3: Inverted BUY order rejection guard
+  const badBuyOrder: StandardizedOrderRequest = {
+    brokerId: 'CAPITAL_COM',
+    symbol: 'EURUSD',
+    direction: 'BUY',
+    orderType: 'MARKET',
+    units: 10000,
+    riskPct: 1.0,
+    riskCapitalUsd: 150,
+    entryPrice: 1.11500,
+    stopLoss: 1.11800, // Invalid: above entry price
+    takeProfit1: 1.12500,
+    riskReward: 3.3,
+    clientOrderId: `test-bad-buy-${Date.now()}`,
+    source: 'MANUAL_TICKET',
+  };
+  const badBuyResult = await brokerManager.executeManualOrder(badBuyOrder);
+  recordTest(
+    'Risk Guard',
+    'Inverted BUY Rejection Guard (SL >= Entry)',
+    badBuyResult.success === false && badBuyResult.status === 'REJECTED',
+    `Order properly rejected: "${badBuyResult.message}"`
+  );
+
+  // Check 4: Inverted SELL order rejection guard
+  const badSellOrder: StandardizedOrderRequest = {
+    brokerId: 'CAPITAL_COM',
+    symbol: 'EURUSD',
+    direction: 'SELL',
+    orderType: 'MARKET',
+    units: 10000,
+    riskPct: 1.0,
+    riskCapitalUsd: 150,
+    entryPrice: 1.11500,
+    stopLoss: 1.11200, // Invalid: below entry price for short
+    takeProfit1: 1.10500,
+    riskReward: 3.3,
+    clientOrderId: `test-bad-sell-${Date.now()}`,
+    source: 'MANUAL_TICKET',
+  };
+  const badSellResult = await brokerManager.executeManualOrder(badSellOrder);
+  recordTest(
+    'Risk Guard',
+    'Inverted SELL Rejection Guard (SL <= Entry)',
+    badSellResult.success === false && badSellResult.status === 'REJECTED',
+    `Order properly rejected: "${badSellResult.message}"`
+  );
+
+  // Check 5: Valid manual order execution
+  const validBuyOrder: StandardizedOrderRequest = {
+    brokerId: 'CAPITAL_COM',
+    symbol: 'EURUSD',
+    direction: 'BUY',
+    orderType: 'MARKET',
+    units: metrics1.units,
+    riskPct: 1.0,
+    riskCapitalUsd: 150,
+    entryPrice: 1.11500,
+    stopLoss: 1.11200,
+    takeProfit1: 1.12100,
+    riskReward: 2.0,
+    clientOrderId: `test-valid-buy-${Date.now()}`,
+    source: 'MANUAL_TICKET',
+  };
+  const validOrderResult = await brokerManager.executeManualOrder(validBuyOrder);
+  recordTest(
+    'Broker Gateway',
+    'Valid Manual Order Execution & Fill Confirmation',
+    validOrderResult.success === true && validOrderResult.status === 'FILLED' && Boolean(validOrderResult.brokerTicketId),
+    `Ticket #${validOrderResult.brokerTicketId} filled at ${validOrderResult.fillPrice} on ${validOrderResult.brokerId}`
+  );
+
+  // Check 6: Move Stop Loss to Breakeven
+  if (validOrderResult.brokerTicketId) {
+    const beResult = await brokerManager.moveToBreakeven('CAPITAL_COM', validOrderResult.brokerTicketId);
+    recordTest(
+      'Risk Management',
+      'Move Stop Loss to Breakeven (0% Risk Locked)',
+      beResult.success === true && typeof beResult.newStopLoss === 'number' && beResult.newStopLoss >= validOrderResult.fillPrice,
+      `Position #${validOrderResult.brokerTicketId} SL moved to breakeven at ${beResult.newStopLoss} (cushion included)`
+    );
+  }
+
+  // Check 7: Closed positions history tracking
+  const closed = await brokerManager.getClosedPositions('CAPITAL_COM');
+  recordTest(
+    'Broker History',
+    'Closed Trade History Retrieval & Audit Trail',
+    Array.isArray(closed),
+    `Tracked closed positions array returned (${closed.length} records)`
   );
 
   // -------------------------------------------------------------------------

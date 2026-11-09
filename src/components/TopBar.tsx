@@ -33,6 +33,7 @@ interface TopBarProps {
   oppCount?: number;
   alertsCount?: number;
   paperEquity?: number;
+  brokerEquity?: number;
   engineMode?: 'AI_GEMINI' | 'QUANT_DETERMINISTIC';
   engineMessage?: string;
   activeBrokerName?: string;
@@ -56,7 +57,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   testPassed,
   oppCount = 6,
   alertsCount = 1,
-  paperEquity = 10366,
+  paperEquity = 10000,
+  brokerEquity,
   engineMode = 'QUANT_DETERMINISTIC',
   engineMessage,
   activeBrokerName = 'Capital.com',
@@ -149,6 +151,11 @@ export const TopBar: React.FC<TopBarProps> = ({
           >
             <Globe className="w-3.5 h-3.5 text-cyan-400" />
             <span>Broker</span>
+            {brokerEquity !== undefined && brokerEquity > 0 && (
+              <span className="text-[10px] text-cyan-300 hidden md:inline tabular-nums font-semibold">
+                ${brokerEquity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+            )}
             {brokerPositionsCount > 0 && (
               <span className="px-1.5 py-0.2 rounded-full bg-cyan-500/20 text-cyan-300 text-[10px]">
                 {brokerPositionsCount}

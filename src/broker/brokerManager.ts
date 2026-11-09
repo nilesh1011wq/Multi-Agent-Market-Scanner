@@ -260,6 +260,13 @@ class BrokerManager {
     return closed;
   }
 
+  public async getClosedPositions(brokerId?: BrokerId): Promise<BrokerClosedPosition[]> {
+    const adapter = brokerId ? (this.adapters[brokerId] || this.getActiveAdapter()) : this.getActiveAdapter();
+    const closed = await adapter.getClosedPositions();
+    this.syncClosedTradesToBayesianScorecards(closed);
+    return closed;
+  }
+
   public getAuditLogs(): ExecutionAuditLog[] {
     return [...this.auditLogs];
   }
@@ -453,6 +460,40 @@ class BrokerManager {
       }
     }
 
+    // Validate directional Stop Loss orientation before calculating sizing or dispatching
+    if (order.stopLoss > 0 && refEntryPrice > 0) {
+      if (order.direction === 'BUY' && order.stopLoss >= refEntryPrice) {
+        return {
+          success: false,
+          brokerId: order.brokerId,
+          symbol: order.symbol,
+          direction: order.direction,
+          units: order.units,
+          fillPrice: 0,
+          stopLoss: order.stopLoss,
+          takeProfit: order.takeProfit1,
+          timestamp: Date.now(),
+          status: 'REJECTED',
+          message: `Order rejected: Stop Loss (${order.stopLoss}) must be strictly below Entry Price (${refEntryPrice}) for BUY.`,
+        };
+      }
+      if (order.direction === 'SELL' && order.stopLoss <= refEntryPrice) {
+        return {
+          success: false,
+          brokerId: order.brokerId,
+          symbol: order.symbol,
+          direction: order.direction,
+          units: order.units,
+          fillPrice: 0,
+          stopLoss: order.stopLoss,
+          takeProfit: order.takeProfit1,
+          timestamp: Date.now(),
+          status: 'REJECTED',
+          message: `Order rejected: Stop Loss (${order.stopLoss}) must be strictly above Entry Price (${refEntryPrice}) for SELL.`,
+        };
+      }
+    }
+
     if (refEntryPrice > 0 && order.stopLoss > 0) {
       const metrics = calculateRiskBasedOrderMetrics(
         order.symbol,
@@ -545,6 +586,13 @@ class BrokerManager {
     }
 
     return { success: false, message: `Adapter ${brokerId} does not support SL modification.` };
+  }
+
+  public async moveToBreakeven(
+    brokerId: BrokerId,
+    ticketId: string
+  ): Promise<{ success: boolean; message: string; newStopLoss?: number }> {
+    return this.movePositionToBreakeven(brokerId, ticketId);
   }
 
   /**

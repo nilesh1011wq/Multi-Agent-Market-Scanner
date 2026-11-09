@@ -262,45 +262,122 @@ export const ChartPane: React.FC<ChartPaneProps> = ({
           })}
 
           {/* Live Broker Open Position Trade Overlays (Entry, SL, TP) */}
-          {symbolPositions.map((pos) => (
-            <g key={`pos-overlay-${pos.brokerTicketId}`}>
-              {/* Entry Line */}
-              {pos.openPrice > 0 && (
-                <line
-                  x1="0"
-                  y1={getY(pos.openPrice)}
-                  x2={chartWidth}
-                  y2={getY(pos.openPrice)}
-                  stroke="#22d3ee"
-                  strokeWidth="1.5"
-                />
-              )}
-              {/* Stop Loss Line */}
-              {pos.stopLoss > 0 && (
-                <line
-                  x1="0"
-                  y1={getY(pos.stopLoss)}
-                  x2={chartWidth}
-                  y2={getY(pos.stopLoss)}
-                  stroke="#f43f5e"
-                  strokeWidth="1.5"
-                  strokeDasharray="5 3"
-                />
-              )}
-              {/* Take Profit Line */}
-              {pos.takeProfit > 0 && (
-                <line
-                  x1="0"
-                  y1={getY(pos.takeProfit)}
-                  x2={chartWidth}
-                  y2={getY(pos.takeProfit)}
-                  stroke="#10b981"
-                  strokeWidth="1.5"
-                  strokeDasharray="5 3"
-                />
-              )}
-            </g>
-          ))}
+          {symbolPositions.map((pos) => {
+            const entryY = getY(pos.openPrice);
+            const slY = getY(pos.stopLoss);
+            const tpY = getY(pos.takeProfit);
+
+            return (
+              <g key={`pos-overlay-${pos.brokerTicketId}`}>
+                {/* Entry Line & Badge */}
+                {pos.openPrice > 0 && (
+                  <g>
+                    <line
+                      x1="0"
+                      y1={entryY}
+                      x2={chartWidth}
+                      y2={entryY}
+                      stroke="#22d3ee"
+                      strokeWidth="1.5"
+                    />
+                    <rect
+                      x={chartWidth - 110}
+                      y={entryY - 8}
+                      width="106"
+                      height="16"
+                      rx="3"
+                      fill="#083344"
+                      stroke="#22d3ee"
+                      strokeWidth="1"
+                    />
+                    <text
+                      x={chartWidth - 57}
+                      y={entryY + 4}
+                      textAnchor="middle"
+                      fill="#67e8f9"
+                      fontSize="9"
+                      fontFamily="monospace"
+                      fontWeight="bold"
+                    >
+                      ENTRY {pos.openPrice}
+                    </text>
+                  </g>
+                )}
+
+                {/* Stop Loss Line & Badge */}
+                {pos.stopLoss > 0 && (
+                  <g>
+                    <line
+                      x1="0"
+                      y1={slY}
+                      x2={chartWidth}
+                      y2={slY}
+                      stroke="#f43f5e"
+                      strokeWidth="1.5"
+                      strokeDasharray="5 3"
+                    />
+                    <rect
+                      x={chartWidth - 95}
+                      y={slY - 8}
+                      width="91"
+                      height="16"
+                      rx="3"
+                      fill="#4c0519"
+                      stroke="#f43f5e"
+                      strokeWidth="1"
+                    />
+                    <text
+                      x={chartWidth - 49}
+                      y={slY + 4}
+                      textAnchor="middle"
+                      fill="#fda4af"
+                      fontSize="9"
+                      fontFamily="monospace"
+                      fontWeight="bold"
+                    >
+                      SL {pos.stopLoss}
+                    </text>
+                  </g>
+                )}
+
+                {/* Take Profit Line & Badge */}
+                {pos.takeProfit > 0 && (
+                  <g>
+                    <line
+                      x1="0"
+                      y1={tpY}
+                      x2={chartWidth}
+                      y2={tpY}
+                      stroke="#10b981"
+                      strokeWidth="1.5"
+                      strokeDasharray="5 3"
+                    />
+                    <rect
+                      x={chartWidth - 95}
+                      y={tpY - 8}
+                      width="91"
+                      height="16"
+                      rx="3"
+                      fill="#064e3b"
+                      stroke="#10b981"
+                      strokeWidth="1"
+                    />
+                    <text
+                      x={chartWidth - 49}
+                      y={tpY + 4}
+                      textAnchor="middle"
+                      fill="#6ee7b7"
+                      fontSize="9"
+                      fontFamily="monospace"
+                      fontWeight="bold"
+                    >
+                      TP {pos.takeProfit}
+                    </text>
+                  </g>
+                )}
+              </g>
+            );
+          })}
 
           {/* Crosshair on Hover */}
           {hoverIndex !== null && (

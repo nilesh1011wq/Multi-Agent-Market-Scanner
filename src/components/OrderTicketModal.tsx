@@ -147,16 +147,49 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
     }
   }, [isOpen, symbol, activeBroker.id, liveEquity, riskPct, entryPrice, stopLoss, riskMetrics.units]);
 
+  const handleDirectionChange = (newDir: 'BUY' | 'SELL') => {
+    if (newDir === direction) return;
+    setDirection(newDir);
+    setErrorMsg(null);
+    if (entryPrice > 0 && stopLoss > 0 && takeProfit > 0) {
+      const slDist = Math.abs(entryPrice - stopLoss);
+      const tpDist = Math.abs(takeProfit - entryPrice);
+      const def = getInstrumentDefinition(symbol);
+      const digits = def?.digits || 5;
+      if (newDir === 'BUY') {
+        setStopLoss(Number((entryPrice - slDist).toFixed(digits)));
+        setTakeProfit(Number((entryPrice + tpDist).toFixed(digits)));
+      } else {
+        setStopLoss(Number((entryPrice + slDist).toFixed(digits)));
+        setTakeProfit(Number((entryPrice - tpDist).toFixed(digits)));
+      }
+    }
+  };
+
   if (!isOpen) return null;
 
-  const riskDist = Math.abs(entryPrice - stopLoss);
-  const rewardDist = Math.abs(takeProfit - entryPrice);
-  const calculatedRR = riskDist > 0 ? rewardDist / riskDist : 0;
-  const isRRCompliant = calculatedRR >= 1.5;
+  const isDirectionValid =
+    direction === 'BUY'
+      ? entryPrice > 0 && stopLoss < entryPrice && takeProfit > entryPrice
+      : entryPrice > 0 && stopLoss > entryPrice && takeProfit < entryPrice;
+
+  const riskDist = direction === 'BUY' ? entryPrice - stopLoss : stopLoss - entryPrice;
+  const rewardDist = direction === 'BUY' ? takeProfit - entryPrice : entryPrice - takeProfit;
+  const calculatedRR = isDirectionValid && riskDist > 0 ? rewardDist / riskDist : 0;
+  const isRRCompliant = isDirectionValid && calculatedRR >= 1.5;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
+
+    if (!isDirectionValid) {
+      setErrorMsg(
+        direction === 'BUY'
+          ? 'Invalid order structure: For BUY orders, Stop Loss must be strictly below Entry and Take Profit above Entry.'
+          : 'Invalid order structure: For SELL orders, Stop Loss must be strictly above Entry and Take Profit below Entry.'
+      );
+      return;
+    }
 
     if (units <= 0) {
       setErrorMsg('Volume / Units must be greater than zero.');
@@ -261,7 +294,7 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
               <div className="grid grid-cols-2 gap-1.5 bg-slate-950 p-1 rounded border border-slate-800">
                 <button
                   type="button"
-                  onClick={() => setDirection('BUY')}
+                  onClick={() => handleDirectionChange('BUY')}
                   className={`py-1 rounded font-bold transition-colors cursor-pointer text-center ${
                     direction === 'BUY'
                       ? 'bg-emerald-500 text-slate-950'
@@ -272,7 +305,7 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDirection('SELL')}
+                  onClick={() => handleDirectionChange('SELL')}
                   className={`py-1 rounded font-bold transition-colors cursor-pointer text-center ${
                     direction === 'SELL'
                       ? 'bg-rose-500 text-slate-950'
@@ -395,14 +428,14 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
           {/* Risk-Reward & Effective Risk Telemetry Badge */}
           <div className="bg-slate-950/80 p-2.5 rounded border border-slate-800 space-y-1.5">
             <div className="flex items-center justify-between">
-              <span className="text-slate-400">Calculated R:R Ratio:</span>
+              <span className="text-slate-400">Order Validation &amp; R:R:</span>
               <div className="flex items-center gap-1.5">
                 <span
                   className={`font-black tabular-nums text-sm ${
                     isRRCompliant ? 'text-emerald-400' : 'text-rose-400'
                   }`}
                 >
-                  1 : {calculatedRR.toFixed(2)}
+                  {isDirectionValid ? `1 : ${calculatedRR.toFixed(2)}` : 'INVALID ORIENTATION'}
                 </span>
                 <span
                   className={`text-[9px] px-1.5 py-0.2 rounded font-bold ${
@@ -411,7 +444,13 @@ export const OrderTicketModal: React.FC<OrderTicketModalProps> = ({
                       : 'bg-rose-500/20 text-rose-300'
                   }`}
                 >
-                  {isRRCompliant ? 'APPROVED (>=1.5)' : 'BELOW 1.5 GATE'}
+                  {isRRCompliant
+                    ? 'APPROVED (>=1.5)'
+                    : !isDirectionValid
+                    ? direction === 'BUY'
+                      ? 'SL MUST BE < ENTRY'
+                      : 'SL MUST BE > ENTRY'
+                    : 'BELOW 1.5 GATE'}
                 </span>
               </div>
             </div>
