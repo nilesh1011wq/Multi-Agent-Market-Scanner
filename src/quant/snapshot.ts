@@ -37,16 +37,24 @@ export function computeTechnicalIndicators(
   const lows = candles.map((c) => c.low);
 
   const ema20Arr = calculateEMA(closes, 20);
-  const ema50Arr = calculateEMA(closes, 50);
-  const ema200Arr = calculateEMA(closes, Math.min(200, Math.floor(len * 0.9)));
+  const ema50Arr = calculateEMA(closes, Math.min(50, Math.floor(len * 0.6)));
+  const ema200Arr = calculateEMA(closes, Math.min(200, Math.floor(len * 0.85)));
 
   const ema20 = ema20Arr[len - 1];
   const ema50 = ema50Arr[len - 1];
   const ema200 = ema200Arr[len - 1];
 
+  const ema20Prev = ema20Arr[Math.max(0, len - 4)] ?? ema20;
+  const ema50Prev = ema50Arr[Math.max(0, len - 4)] ?? ema50;
+  const ema20Rising = ema20 >= ema20Prev;
+  const ema50Rising = ema50 >= ema50Prev;
+
   let emaStack: 'BULLISH' | 'BEARISH' | 'MIXED' = 'MIXED';
-  if (ema20 > ema50 && ema50 > ema200) emaStack = 'BULLISH';
-  else if (ema20 < ema50 && ema50 < ema200) emaStack = 'BEARISH';
+  if ((ema20 > ema50 && ema50 >= ema200) || (ema20 > ema50 && ema20Rising && ema50Rising)) {
+    emaStack = 'BULLISH';
+  } else if ((ema20 < ema50 && ema50 <= ema200) || (ema20 < ema50 && !ema20Rising && !ema50Rising)) {
+    emaStack = 'BEARISH';
+  }
 
   const rsiArr = calculateRSI(closes, 14);
   const rsi14 = Math.round((rsiArr[len - 1] ?? 50) * 10) / 10;
@@ -68,13 +76,13 @@ export function computeTechnicalIndicators(
   const atrArr = calculateATR(candles, 14);
   const atr14 = Math.round((atrArr[len - 1] ?? 0.001) * 100000) / 100000;
 
-  const distEma20InAtr = atr14 > 0 ? Math.round(((closes[len - 1] - ema20) / atr14) * 10) / 10 : 0;
+  const distEma20InAtr = atr14 > 0 ? Math.round(((closes[len - 1] - ema20) / atr14) * 100) / 100 : 0;
 
   const bb = calculateBollingerBands(closes, 20, 2);
   const bollingerBands = {
-    upper: Math.round(bb.upper[len - 1] * 10000) / 10000,
-    middle: Math.round(bb.middle[len - 1] * 10000) / 10000,
-    lower: Math.round(bb.lower[len - 1] * 10000) / 10000,
+    upper: Math.round(bb.upper[len - 1] * 100000) / 100000,
+    middle: Math.round(bb.middle[len - 1] * 100000) / 100000,
+    lower: Math.round(bb.lower[len - 1] * 100000) / 100000,
     bandwidth: Math.round(bb.bandwidth[len - 1] * 10000) / 10000,
     percentB: Math.round(bb.percentB[len - 1] * 100) / 100,
   };
@@ -87,16 +95,21 @@ export function computeTechnicalIndicators(
     const belowCount = historical1YAtRs.filter((v) => v < atr14).length;
     volatilityPercentile1Y = Math.round((belowCount / historical1YAtRs.length) * 100);
   } else {
-    // Approximate percentile using recent ATRs
     const validAtrs = atrArr.filter((a) => !isNaN(a));
     const belowCount = validAtrs.filter((v) => v < atr14).length;
-    volatilityPercentile1Y = Math.round((belowCount / validAtrs.length) * 100);
+    volatilityPercentile1Y = validAtrs.length > 0 ? Math.round((belowCount / validAtrs.length) * 100) : 50;
   }
   volatilityPercentile10Y = volatilityPercentile1Y;
 
-  // Pivots & Structure
+  // Session Pivots & Structure: use prior completed session window (up to 24 bars) so pivots reflect true structural range
+  const sessionLookback = timeframe === 'D1' || timeframe === 'W1' ? 1 : Math.min(24, Math.max(4, Math.floor(len * 0.2)));
+  const sessionSlice = candles.slice(Math.max(0, len - 1 - sessionLookback), len - 1);
   const prevBar = candles[len - 2] ?? candles[len - 1];
-  const pivots = calculatePivots(prevBar.high, prevBar.low, prevBar.close);
+  const sessionHigh = sessionSlice.length > 0 ? Math.max(...sessionSlice.map((c) => c.high)) : prevBar.high;
+  const sessionLow = sessionSlice.length > 0 ? Math.min(...sessionSlice.map((c) => c.low)) : prevBar.low;
+  const sessionClose = prevBar.close;
+
+  const pivots = calculatePivots(sessionHigh, sessionLow, sessionClose);
   const srClusters = clusterSRLevels(candles, timeframe, atr14, 0.6).slice(0, 6);
   const swingStructure = evaluateMarketStructure(candles, timeframe);
   const patterns = detectCandlePatterns(candles);
@@ -113,9 +126,9 @@ export function computeTechnicalIndicators(
   );
 
   return {
-    ema20: Math.round(ema20 * 10000) / 10000,
-    ema50: Math.round(ema50 * 10000) / 10000,
-    ema200: Math.round(ema200 * 10000) / 10000,
+    ema20: Math.round(ema20 * 100000) / 100000,
+    ema50: Math.round(ema50 * 100000) / 100000,
+    ema200: Math.round(ema200 * 100000) / 100000,
     emaStack,
     distEma20InAtr,
     rsi14,

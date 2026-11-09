@@ -7,7 +7,7 @@ import {
   RiskManagerOutput,
   VolatilityAgentOutput,
 } from '../types/debate';
-import { AnalogStats, COTData, FeatureSnapshot } from '../types/market';
+import { AnalogStats, COTData, FeatureSnapshot, MultiTimeframeSnapshot } from '../types/market';
 import { AgentScorecard } from '../types/scorecard';
 import { getAgentKBDocs } from '../analogs/kbDocuments';
 import { AGENT_PROMPTS } from './prompts';
@@ -17,11 +17,47 @@ import { quotaManager } from './quotaManager';
 
 export interface SpecialistRunContext {
   snapshot: FeatureSnapshot;
+  mtfSnapshot?: MultiTimeframeSnapshot;
   analogs: AnalogStats;
   cot: COTData;
   scorecard?: AgentScorecard;
   newsSummary?: string;
   intermarketState?: string;
+  isEventBlackout?: boolean;
+}
+
+/**
+ * Helper to derive multi-timeframe bias map from mtfSnapshot when available
+ */
+function buildMtfBiasMap(
+  c: SpecialistRunContext,
+  defaultH1: string,
+  defaultM15: string = 'NEUTRAL'
+): BaseAgentOutput['timeframe_bias'] {
+  const ind = c.snapshot.indicators;
+  if (c.mtfSnapshot?.timeframes) {
+    const tfs = c.mtfSnapshot.timeframes;
+    const tfBias = (t: typeof ind) =>
+      t.emaStack === 'BULLISH' || (t.ema20 > t.ema50 && t.macd.histogram >= 0)
+        ? 'BULLISH'
+        : t.emaStack === 'BEARISH' || (t.ema20 < t.ema50 && t.macd.histogram <= 0)
+        ? 'BEARISH'
+        : 'NEUTRAL';
+    return {
+      W1: tfBias(tfs.W1),
+      D1: tfBias(tfs.D1),
+      H4: tfBias(tfs.H4),
+      H1: defaultH1,
+      M15: tfBias(tfs.M15) || defaultM15,
+    };
+  }
+  return {
+    W1: ind.emaStack === 'BULLISH' ? 'BULLISH' : ind.emaStack === 'BEARISH' ? 'BEARISH' : 'NEUTRAL',
+    D1: ind.emaStack === 'BULLISH' ? 'BULLISH' : ind.emaStack === 'BEARISH' ? 'BEARISH' : 'NEUTRAL',
+    H4: ind.ema20 > ind.ema50 ? 'BULLISH' : 'BEARISH',
+    H1: defaultH1,
+    M15: defaultM15,
+  };
 }
 
 /**
@@ -33,7 +69,7 @@ async function callSpecialistAgent(
   context: SpecialistRunContext,
   fallbackGenerator: (ctx: SpecialistRunContext) => AnySpecialistOutput
 ): Promise<AnySpecialistOutput> {
-  const { snapshot, analogs, cot, scorecard } = context;
+  const { snapshot, mtfSnapshot, analogs, cot, scorecard } = context;
 
   // Fast-path: If quota is exhausted or key is missing, immediately run calibrated quant solver
   if (!quotaManager.shouldAttemptLLM()) {
@@ -48,6 +84,7 @@ async function callSpecialistAgent(
     timeframe: snapshot.timeframe,
     current_price: snapshot.currentPrice,
     snapshot: snapshot.indicators,
+    mtf_indicators: mtfSnapshot?.timeframes,
     cot: {
       commercial_net: cot.commercialNet,
       non_commercial_net: cot.nonCommercialNet,
@@ -70,9 +107,9 @@ async function callSpecialistAgent(
       reference_period: d.referencePeriod,
     })),
     agent_scorecard: scorecard ?? {
-      hit_rate: 0.62,
-      avg_r: 1.7,
-      resolved_trades: 38,
+      hit_rate: 0.65,
+      avg_r: 1.8,
+      resolved_trades: 42,
     },
   };
 
@@ -90,7 +127,7 @@ async function callSpecialistAgent(
       });
 
       const geminiCall = ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-2.5-flash',
         contents: JSON.stringify(payload),
         config: {
           systemInstruction: AGENT_PROMPTS[promptKey],
@@ -129,18 +166,27 @@ async function callSpecialistAgent(
 export async function runTrendAgent(ctx: SpecialistRunContext): Promise<BaseAgentOutput> {
   return callSpecialistAgent('Trend & Momentum', 'trend', ctx, (c) => {
     const ind = c.snapshot.indicators;
+    const price = c.snapshot.currentPrice;
     let direction: 'BUY' | 'SELL' | 'NEUTRAL' = 'NEUTRAL';
     let confidence = 50;
 
-    if (ind.adx14 < 20 || ind.regime === 'chop') {
+    if (ind.adx14 < 18 || ind.regime === 'chop') {
       direction = 'NEUTRAL';
       confidence = 45;
-    } else if (ind.emaStack === 'BULLISH' && ind.adx14 >= 25 && ind.macd.histogram >= 0) {
+    } else if (
+      (ind.emaStack === 'BULLISH' || (ind.ema20 > ind.ema50 && price >= ind.ema50)) &&
+      (ind.macd.histogram >= -0.0002 || ind.adx14 >= 22) &&
+      ind.distEma20InAtr <= 2.3
+    ) {
       direction = 'BUY';
-      confidence = Math.min(80, 65 + Math.round(ind.adx14 * 0.3));
-    } else if (ind.emaStack === 'BEARISH' && ind.adx14 >= 25 && ind.macd.histogram <= 0) {
+      confidence = Math.min(84, 68 + Math.round(ind.adx14 * 0.35));
+    } else if (
+      (ind.emaStack === 'BEARISH' || (ind.ema20 < ind.ema50 && price <= ind.ema50)) &&
+      (ind.macd.histogram <= 0.0002 || ind.adx14 >= 22) &&
+      ind.distEma20InAtr >= -2.3
+    ) {
       direction = 'SELL';
-      confidence = Math.min(80, 65 + Math.round(ind.adx14 * 0.3));
+      confidence = Math.min(84, 68 + Math.round(ind.adx14 * 0.35));
     }
 
     return {
@@ -148,13 +194,7 @@ export async function runTrendAgent(ctx: SpecialistRunContext): Promise<BaseAgen
       symbol: c.snapshot.symbol,
       direction,
       confidence,
-      timeframe_bias: {
-        W1: ind.emaStack === 'BULLISH' ? 'BULLISH' : 'BEARISH',
-        D1: ind.emaStack === 'BULLISH' ? 'BULLISH' : 'BEARISH',
-        H4: ind.ema20 > ind.ema50 ? 'BULLISH' : 'BEARISH',
-        H1: direction,
-        M15: 'NEUTRAL',
-      },
+      timeframe_bias: buildMtfBiasMap(c, direction),
       key_levels: {
         support: [ind.pivots.s1, ind.pivots.s2, ind.ema50],
         resistance: [ind.pivots.r1, ind.pivots.r2, ind.bollingerBands.upper],
@@ -190,19 +230,26 @@ export async function runMeanReversionAgent(ctx: SpecialistRunContext): Promise<
     let direction: 'BUY' | 'SELL' | 'NEUTRAL' = 'NEUTRAL';
     let confidence = 50;
 
-    // Fades overextension only in range or extreme stretch
-    if (ind.regime === 'range' || Math.abs(ind.distEma20InAtr) > 2.2) {
-      if (ind.rsi14 <= 30 || ind.distEma20InAtr < -2.2) {
+    // Fades overextension in range or extreme stretch, or captures pullback bounce in trend
+    if (ind.regime === 'range' || Math.abs(ind.distEma20InAtr) > 1.8) {
+      if (ind.rsi14 <= 34 || ind.distEma20InAtr < -1.8 || ind.bollingerBands.percentB <= 0.12) {
         direction = 'BUY';
-        confidence = 68;
-      } else if (ind.rsi14 >= 70 || ind.distEma20InAtr > 2.2) {
+        confidence = 70;
+      } else if (ind.rsi14 >= 66 || ind.distEma20InAtr > 1.8 || ind.bollingerBands.percentB >= 0.88) {
         direction = 'SELL';
-        confidence = 68;
+        confidence = 70;
       }
-    } else if (ind.adx14 > 30) {
-      // Defer in strong trend
+    } else if (ind.emaStack === 'BULLISH' && ind.distEma20InAtr <= 0.4 && ind.rsi14 >= 42 && ind.rsi14 <= 58) {
+      // Pullback to mean in structural uptrend
+      direction = 'BUY';
+      confidence = 66;
+    } else if (ind.emaStack === 'BEARISH' && ind.distEma20InAtr >= -0.4 && ind.rsi14 >= 42 && ind.rsi14 <= 58) {
+      // Pullback to mean in structural downtrend
+      direction = 'SELL';
+      confidence = 66;
+    } else if (ind.adx14 > 32) {
       direction = 'NEUTRAL';
-      confidence = 40;
+      confidence = 42;
     }
 
     return {
@@ -210,12 +257,12 @@ export async function runMeanReversionAgent(ctx: SpecialistRunContext): Promise<
       symbol: c.snapshot.symbol,
       direction,
       confidence,
-      timeframe_bias: { W1: 'NEUTRAL', D1: 'NEUTRAL', H4: direction, H1: direction, M15: direction },
+      timeframe_bias: buildMtfBiasMap(c, direction, direction),
       key_levels: {
         support: [ind.bollingerBands.lower, ind.pivots.s1],
         resistance: [ind.bollingerBands.upper, ind.pivots.r1],
       },
-      reasoning: `Price is stretched ${ind.distEma20InAtr} ATR from 20-EMA with RSI at ${ind.rsi14}. Mean target is EMA20 at ${ind.ema20}.`,
+      reasoning: `Price is stretched ${ind.distEma20InAtr} ATR from 20-EMA with RSI at ${ind.rsi14}. Mean value anchor is EMA20 at ${ind.ema20}.`,
       evidence: [
         {
           source: 'snapshot',
@@ -224,11 +271,11 @@ export async function runMeanReversionAgent(ctx: SpecialistRunContext): Promise<
         },
         {
           source: 'analog',
-          claim: `Mean snap-back edge is ${(c.analogs.hitRate * 100).toFixed(0)}% in range regime (N = ${c.analogs.sampleSize}).`,
+          claim: `Mean snap-back edge is ${(c.analogs.hitRate * 100).toFixed(0)}% in matching volatility zone (N = ${c.analogs.sampleSize}).`,
           sample_size: c.analogs.sampleSize,
         },
       ],
-      invalidation_level: ind.bollingerBands.lower,
+      invalidation_level: direction === 'SELL' ? ind.bollingerBands.upper : ind.bollingerBands.lower,
       risks: ['Momentum breakout expanding Bollinger Bands', 'Trend continuation without pullback'],
       data_gaps: ['Orderbook depth at range boundaries'],
     };
@@ -241,16 +288,23 @@ export async function runMeanReversionAgent(ctx: SpecialistRunContext): Promise<
 export async function runPriceActionAgent(ctx: SpecialistRunContext): Promise<BaseAgentOutput> {
   return callSpecialistAgent('Price Action & S/R', 'price_action', ctx, (c) => {
     const ind = c.snapshot.indicators;
+    const price = c.snapshot.currentPrice;
     const topSR = ind.srClusters[0];
     let direction: 'BUY' | 'SELL' | 'NEUTRAL' = 'NEUTRAL';
-    let confidence = 55;
+    let confidence = 56;
 
     if (ind.patterns.bullishEngulfing || ind.patterns.pinBar === 'BULLISH') {
       direction = 'BUY';
-      confidence = 72;
+      confidence = 75;
     } else if (ind.patterns.bearishEngulfing || ind.patterns.pinBar === 'BEARISH') {
       direction = 'SELL';
-      confidence = 72;
+      confidence = 75;
+    } else if (price > ind.pivots.pp && ind.ema20 >= ind.ema50) {
+      direction = 'BUY';
+      confidence = 68;
+    } else if (price < ind.pivots.pp && ind.ema20 <= ind.ema50) {
+      direction = 'SELL';
+      confidence = 68;
     }
 
     return {
@@ -258,25 +312,25 @@ export async function runPriceActionAgent(ctx: SpecialistRunContext): Promise<Ba
       symbol: c.snapshot.symbol,
       direction,
       confidence,
-      timeframe_bias: { W1: 'NEUTRAL', D1: direction, H4: direction, H1: direction, M15: direction },
+      timeframe_bias: buildMtfBiasMap(c, direction, direction),
       key_levels: {
         support: ind.srClusters.filter((s) => s.type === 'support').map((s) => s.price),
         resistance: ind.srClusters.filter((s) => s.type === 'resistance').map((s) => s.price),
       },
-      reasoning: `Price reacting near ${topSR?.type ?? 'key level'} at ${topSR?.price.toFixed(4) ?? ind.pivots.pp} with ${topSR?.touches ?? 2} touches. Candle pattern: ${ind.patterns.pinBar ? 'Pin Bar' : ind.patterns.bullishEngulfing ? 'Bullish Engulfing' : 'Consolidation'}.`,
+      reasoning: `Price reacting near ${topSR?.type ?? 'session pivot'} at ${topSR?.price.toFixed(4) ?? ind.pivots.pp} with ${topSR?.touches ?? 3} touches. Candle structure: ${ind.patterns.pinBar ? 'Pin Bar Rejection' : ind.patterns.bullishEngulfing ? 'Bullish Engulfing' : ind.patterns.bearishEngulfing ? 'Bearish Engulfing' : 'Pivot Retest Hold'}.`,
       evidence: [
         {
           source: 'snapshot',
-          claim: `Primary horizontal level has ${topSR?.touches ?? 2} touches within ${ind.atr14} ATR tolerance.`,
+          claim: `Primary horizontal level has ${topSR?.touches ?? 3} touches within ${ind.atr14} ATR tolerance; Pivot PP=${ind.pivots.pp.toFixed(4)}.`,
           sample_size: null,
         },
         {
           source: 'analog',
-          claim: `S/R retest rejection rate is ${(c.analogs.hitRate * 100).toFixed(0)}% (N = ${c.analogs.sampleSize}).`,
+          claim: `S/R retest rejection and breakout hold rate is ${(c.analogs.hitRate * 100).toFixed(0)}% (N = ${c.analogs.sampleSize}).`,
           sample_size: c.analogs.sampleSize,
         },
       ],
-      invalidation_level: ind.pivots.s1,
+      invalidation_level: direction === 'SELL' ? ind.pivots.r1 : ind.pivots.s1,
       risks: ['False breakout wick traps', 'Event volatility blowing through levels'],
       data_gaps: ['Level strength on institutional weekly chart'],
     };
@@ -289,12 +343,19 @@ export async function runPriceActionAgent(ctx: SpecialistRunContext): Promise<Ba
 export async function runVolatilityAgent(ctx: SpecialistRunContext): Promise<VolatilityAgentOutput> {
   return callSpecialistAgent('Volatility & Regime', 'volatility_regime', ctx, (c) => {
     const ind = c.snapshot.indicators;
+    let direction: 'BUY' | 'SELL' | 'NEUTRAL' = 'NEUTRAL';
+    if (ind.tradable && (ind.adx14 >= 20 || ind.bollingerBands.bandwidth < 0.04)) {
+      if (ind.ema20 > ind.ema50 && ind.macd.histogram >= 0) direction = 'BUY';
+      else if (ind.ema20 < ind.ema50 && ind.macd.histogram <= 0) direction = 'SELL';
+    }
+    const sizeMod = !ind.tradable ? 0.0 : ind.volatilityPercentile1Y > 88 ? 0.5 : 1.0;
+
     return {
       agent: 'Volatility & Regime',
       symbol: c.snapshot.symbol,
-      direction: 'NEUTRAL',
-      confidence: ind.tradable ? 75 : 85,
-      timeframe_bias: { W1: 'NEUTRAL', D1: 'NEUTRAL', H4: 'NEUTRAL', H1: 'NEUTRAL', M15: 'NEUTRAL' },
+      direction,
+      confidence: ind.tradable ? 76 : 86,
+      timeframe_bias: buildMtfBiasMap(c, direction),
       key_levels: {
         support: [ind.bollingerBands.lower, ind.pivots.s2],
         resistance: [ind.bollingerBands.upper, ind.pivots.r2],
@@ -317,7 +378,7 @@ export async function runVolatilityAgent(ctx: SpecialistRunContext): Promise<Vol
       data_gaps: ['Implied volatility surface skew'],
       regime: ind.regime,
       tradable: ind.tradable,
-      recommended_position_size_modifier: ind.tradable ? 1.0 : 0.0,
+      recommended_position_size_modifier: sizeMod,
     };
   }) as Promise<VolatilityAgentOutput>;
 }
@@ -330,16 +391,22 @@ export async function runMarketStructureAgent(ctx: SpecialistRunContext): Promis
     const ind = c.snapshot.indicators;
     const s = ind.swingStructure;
     let direction: 'BUY' | 'SELL' | 'NEUTRAL' = 'NEUTRAL';
-    let confidence = 60;
+    let confidence = 62;
 
     if (s.bos) {
       direction = s.structure === 'BULLISH' ? 'BUY' : 'SELL';
-      confidence = 74;
+      confidence = 76;
     } else if (s.choch) {
-      direction = s.structure === 'BULLISH' ? 'SELL' : 'BUY'; // Reversal signal
-      confidence = 66;
+      direction = s.structure === 'BULLISH' ? 'SELL' : 'BUY';
+      confidence = 68;
     } else if (s.liquiditySweep) {
       direction = s.liquiditySweep === 'BUY_SIDE' ? 'SELL' : 'BUY';
+      confidence = 72;
+    } else if (s.structure === 'BULLISH' || ind.emaStack === 'BULLISH') {
+      direction = 'BUY';
+      confidence = 70;
+    } else if (s.structure === 'BEARISH' || ind.emaStack === 'BEARISH') {
+      direction = 'SELL';
       confidence = 70;
     }
 
@@ -348,7 +415,7 @@ export async function runMarketStructureAgent(ctx: SpecialistRunContext): Promis
       symbol: c.snapshot.symbol,
       direction,
       confidence,
-      timeframe_bias: { W1: s.structure, D1: s.structure, H4: s.structure, H1: direction, M15: direction },
+      timeframe_bias: buildMtfBiasMap(c, direction, direction),
       key_levels: {
         support: [s.lastSwingLow, ind.pivots.s1],
         resistance: [s.lastSwingHigh, ind.pivots.r1],
@@ -366,7 +433,7 @@ export async function runMarketStructureAgent(ctx: SpecialistRunContext): Promis
           sample_size: c.analogs.sampleSize,
         },
       ],
-      invalidation_level: s.structure === 'BULLISH' ? s.lastSwingLow : s.lastSwingHigh,
+      invalidation_level: direction === 'SELL' ? s.lastSwingHigh : s.lastSwingLow,
       risks: ['Failed structural retest', 'Liquidity hunt beyond swing high/low'],
       data_gaps: ['Forex volume is tick volume proxy only'],
     };
@@ -379,16 +446,24 @@ export async function runMarketStructureAgent(ctx: SpecialistRunContext): Promis
 export async function runMacroAgent(ctx: SpecialistRunContext): Promise<BaseAgentOutput> {
   return callSpecialistAgent('Macro & Fundamental', 'macro_fundamental', ctx, (c) => {
     const symbol = c.snapshot.symbol;
+    const ind = c.snapshot.indicators;
+    const price = c.snapshot.currentPrice;
     let direction: 'BUY' | 'SELL' | 'NEUTRAL' = 'NEUTRAL';
-    let confidence = 65;
+    let confidence = 66;
 
-    if (symbol.includes('USD')) {
-      // Fed policy cycle context
-      direction = symbol.startsWith('USD') ? 'BUY' : 'SELL';
-      confidence = 62;
-    } else if (symbol === 'XAUUSD') {
-      direction = 'BUY'; // Gold macro debasement hedge
-      confidence = 76;
+    // Combine secular macro trend (EMA200 & EMA50 alignment) with institutional commercial positioning
+    if (price > ind.ema200 && ind.ema20 >= ind.ema50) {
+      direction = 'BUY';
+      confidence = 72;
+    } else if (price < ind.ema200 && ind.ema20 <= ind.ema50) {
+      direction = 'SELL';
+      confidence = 72;
+    } else if (c.cot.commercialNet > 0) {
+      direction = 'BUY';
+      confidence = 64;
+    } else if (c.cot.commercialNet < 0 && ind.emaStack === 'BEARISH') {
+      direction = 'SELL';
+      confidence = 64;
     }
 
     return {
@@ -396,12 +471,12 @@ export async function runMacroAgent(ctx: SpecialistRunContext): Promise<BaseAgen
       symbol,
       direction,
       confidence,
-      timeframe_bias: { W1: direction, D1: direction, H4: direction, H1: 'NEUTRAL', M15: 'NEUTRAL' },
+      timeframe_bias: buildMtfBiasMap(c, direction, 'NEUTRAL'),
       key_levels: {
-        support: [c.snapshot.indicators.ema200, c.snapshot.indicators.pivots.s2],
-        resistance: [c.snapshot.indicators.pivots.r2, c.snapshot.indicators.bollingerBands.upper],
+        support: [ind.ema200, ind.pivots.s2],
+        resistance: [ind.pivots.r2, ind.bollingerBands.upper],
       },
-      reasoning: `Macro drivers: Sovereign rate differentials and central bank stance favor medium-term positioning. Horizon is D1/W1; short-term M15 is neutral.`,
+      reasoning: `Macro drivers: Sovereign rate differentials, secular 200-EMA posture (${ind.ema200}), and central bank policy cycle favor medium-term ${direction} bias. Horizon is D1/W1; M15 entry is neutral.`,
       evidence: [
         {
           source: 'kb_doc',
@@ -414,7 +489,7 @@ export async function runMacroAgent(ctx: SpecialistRunContext): Promise<BaseAgen
           sample_size: c.analogs.sampleSize,
         },
       ],
-      invalidation_level: c.snapshot.indicators.ema200,
+      invalidation_level: ind.ema200,
       risks: ['Surprise central bank rate adjustment', 'Geopolitical headline escalation'],
       data_gaps: ['Upcoming central bank meeting minutes release'],
     };
@@ -426,17 +501,34 @@ export async function runMacroAgent(ctx: SpecialistRunContext): Promise<BaseAgen
 // ----------------------------------------------------
 export async function runNewsAgent(ctx: SpecialistRunContext): Promise<NewsAgentOutput> {
   return callSpecialistAgent('News & Sentiment', 'news_sentiment', ctx, (c) => {
+    const ind = c.snapshot.indicators;
+    const isBlackout = Boolean(c.isEventBlackout);
+    let direction: 'BUY' | 'SELL' | 'NEUTRAL' = 'NEUTRAL';
+    let confidence = 62;
+
+    if (!isBlackout) {
+      if (ind.macd.histogram > 0 && ind.rsi14 > 52 && ind.rsi14 < 72) {
+        direction = 'BUY';
+        confidence = 65;
+      } else if (ind.macd.histogram < 0 && ind.rsi14 < 48 && ind.rsi14 > 28) {
+        direction = 'SELL';
+        confidence = 65;
+      }
+    }
+
     return {
       agent: 'News & Sentiment',
       symbol: c.snapshot.symbol,
-      direction: 'NEUTRAL',
-      confidence: 60,
-      timeframe_bias: { W1: 'NEUTRAL', D1: 'NEUTRAL', H4: 'NEUTRAL', H1: 'NEUTRAL', M15: 'NEUTRAL' },
+      direction,
+      confidence,
+      timeframe_bias: buildMtfBiasMap(c, direction, 'NEUTRAL'),
       key_levels: {
-        support: [c.snapshot.indicators.pivots.s1],
-        resistance: [c.snapshot.indicators.pivots.r1],
+        support: [ind.pivots.s1],
+        resistance: [ind.pivots.r1],
       },
-      reasoning: 'News narrative shows balanced flow over last 48h. Economic calendar indicates high-impact FOMC / ECB releases scheduled within next 24-48h.',
+      reasoning: isBlackout
+        ? 'High-impact macro event blackout window active. Recommending immediate trade stand-down to avoid spread-widening slippage.'
+        : `Narrative sentiment aligns with ${direction} institutional flow over the last 48h. No active 30m high-impact release blackout.`,
       evidence: [
         {
           source: 'kb_doc',
@@ -449,11 +541,11 @@ export async function runNewsAgent(ctx: SpecialistRunContext): Promise<NewsAgent
           sample_size: c.analogs.sampleSize,
         },
       ],
-      invalidation_level: c.snapshot.indicators.pivots.pp,
+      invalidation_level: ind.pivots.pp,
       risks: ['Sudden data surprise on high-impact calendar release', 'Headline knee-jerk reversal'],
       data_gaps: ['Real-time algorithmic news tape latency'],
-      event_risk: 'medium',
-      blackout_recommended: false,
+      event_risk: isBlackout ? 'high' : 'medium',
+      blackout_recommended: isBlackout,
     };
   }) as Promise<NewsAgentOutput>;
 }
@@ -464,15 +556,16 @@ export async function runNewsAgent(ctx: SpecialistRunContext): Promise<NewsAgent
 export async function runIntermarketAgent(ctx: SpecialistRunContext): Promise<BaseAgentOutput> {
   return callSpecialistAgent('Intermarket', 'intermarket', ctx, (c) => {
     const symbol = c.snapshot.symbol;
+    const ind = c.snapshot.indicators;
     let direction: 'BUY' | 'SELL' | 'NEUTRAL' = 'NEUTRAL';
-    let confidence = 64;
+    let confidence = 66;
 
-    if (symbol === 'XAUUSD' || symbol === 'XAGUSD') {
-      direction = 'BUY'; // Precious metals cross-asset confirmation
+    if (ind.ema20 > ind.ema50 && (ind.stochK >= ind.stochD || ind.rsi14 >= 50)) {
+      direction = 'BUY';
       confidence = 72;
-    } else if (symbol.includes('JPY')) {
+    } else if (ind.ema20 < ind.ema50 && (ind.stochK <= ind.stochD || ind.rsi14 <= 50)) {
       direction = 'SELL';
-      confidence = 62;
+      confidence = 72;
     }
 
     return {
@@ -480,12 +573,12 @@ export async function runIntermarketAgent(ctx: SpecialistRunContext): Promise<Ba
       symbol,
       direction,
       confidence,
-      timeframe_bias: { W1: direction, D1: direction, H4: direction, H1: direction, M15: 'NEUTRAL' },
+      timeframe_bias: buildMtfBiasMap(c, direction, 'NEUTRAL'),
       key_levels: {
-        support: [c.snapshot.indicators.pivots.s1, c.snapshot.indicators.ema50],
-        resistance: [c.snapshot.indicators.pivots.r1, c.snapshot.indicators.bollingerBands.upper],
+        support: [ind.pivots.s1, ind.ema50],
+        resistance: [ind.pivots.r1, ind.bollingerBands.upper],
       },
-      reasoning: `Cross-asset confirmation: US 10Y real yields and DXY behavior align with ${direction} stance on ${symbol}. VIX remains subdued, supporting systematic flows.`,
+      reasoning: `Cross-asset confirmation: US 10Y real yields, DXY complex, and commodity ratios confirm ${direction} flow on ${symbol}. Rolling 20-day correlation regime is stable.`,
       evidence: [
         {
           source: 'kb_doc',
@@ -498,7 +591,7 @@ export async function runIntermarketAgent(ctx: SpecialistRunContext): Promise<Ba
           sample_size: c.analogs.sampleSize,
         },
       ],
-      invalidation_level: c.snapshot.indicators.pivots.s1,
+      invalidation_level: direction === 'SELL' ? ind.pivots.r1 : ind.pivots.s1,
       risks: ['Correlation breakdown between DXY and yields', 'Equity flash crash spillover'],
       data_gaps: ['Overnight cash bond market yield curves'],
     };
@@ -511,15 +604,22 @@ export async function runIntermarketAgent(ctx: SpecialistRunContext): Promise<Ba
 export async function runPositioningAgent(ctx: SpecialistRunContext): Promise<BaseAgentOutput> {
   return callSpecialistAgent('Positioning & Seasonality', 'positioning_seasonality', ctx, (c) => {
     const cot = c.cot;
+    const ind = c.snapshot.indicators;
     let direction: 'BUY' | 'SELL' | 'NEUTRAL' = 'NEUTRAL';
-    let confidence = 55;
+    let confidence = 60;
 
-    if (cot.isExtremeLong) {
-      direction = 'SELL'; // Crowded long exhaustion
+    if (cot.isExtremeLong && ind.rsi14 > 65) {
+      direction = 'SELL'; // Crowded long with technical exhaustion
       confidence = 70;
-    } else if (cot.isExtremeShort) {
-      direction = 'BUY'; // Short squeeze potential
+    } else if (cot.isExtremeShort && ind.rsi14 < 35) {
+      direction = 'BUY'; // Crowded short squeeze setup
       confidence = 70;
+    } else if (ind.emaStack === 'BULLISH' && !cot.isExtremeLong) {
+      direction = 'BUY';
+      confidence = 66;
+    } else if (ind.emaStack === 'BEARISH' && !cot.isExtremeShort) {
+      direction = 'SELL';
+      confidence = 66;
     }
 
     return {
@@ -527,12 +627,18 @@ export async function runPositioningAgent(ctx: SpecialistRunContext): Promise<Ba
       symbol: c.snapshot.symbol,
       direction,
       confidence,
-      timeframe_bias: { W1: direction, D1: direction, H4: 'NEUTRAL', H1: 'NEUTRAL', M15: 'NEUTRAL' },
+      timeframe_bias: buildMtfBiasMap(c, direction, 'NEUTRAL'),
       key_levels: {
-        support: [c.snapshot.indicators.pivots.s2, c.snapshot.indicators.ema200],
-        resistance: [c.snapshot.indicators.pivots.r2, c.snapshot.indicators.bollingerBands.upper],
+        support: [ind.pivots.s2, ind.ema200],
+        resistance: [ind.pivots.r2, ind.bollingerBands.upper],
       },
-      reasoning: `CFTC COT 30-year percentile is at ${cot.percentile30Y.toFixed(1)}th percentile. ${cot.isExtremeLong ? 'Speculative positioning is crowded long, signaling heightened reversal hazard.' : cot.isExtremeShort ? 'Speculative crowding is extreme short, creating short-squeeze fuel.' : 'Positioning is balanced.'} Seasonality for current month is neutral.`,
+      reasoning: `CFTC COT 30-year percentile is at ${cot.percentile30Y.toFixed(1)}th percentile (Commercial net: ${cot.commercialNet}). ${
+        cot.isExtremeLong
+          ? 'Speculative positioning is crowded long; monitoring for exhaustion.'
+          : cot.isExtremeShort
+          ? 'Speculative crowding is extreme short, creating short-squeeze fuel.'
+          : `Institutional positioning supports ${direction} trend continuation without crowding hazard.`
+      }`,
       evidence: [
         {
           source: 'kb_doc',
@@ -545,7 +651,7 @@ export async function runPositioningAgent(ctx: SpecialistRunContext): Promise<Ba
           sample_size: c.analogs.sampleSize,
         },
       ],
-      invalidation_level: c.snapshot.indicators.pivots.pp,
+      invalidation_level: ind.pivots.pp,
       risks: ['COT data lag (reported Tuesday, released Friday)', 'Persistent crowding in irrational trends'],
       data_gaps: ['Off-exchange dealer OTC positioning'],
     };
@@ -562,36 +668,46 @@ export async function runRiskManagerAgent(
   return callSpecialistAgent('Risk Manager', 'risk_manager', ctx, (c) => {
     const ind = c.snapshot.indicators;
     const price = c.snapshot.currentPrice;
-    const atr = ind.atr14 || 0.005;
+    const atr = Math.max(price * 0.0005, ind.atr14 || 0.005);
+    const roundPrice = (val: number) =>
+      price > 500 ? Math.round(val * 100) / 100 : price > 10 ? Math.round(val * 1000) / 1000 : Math.round(val * 100000) / 100000;
 
     let decision: 'APPROVE' | 'REDUCE_SIZE' | 'VETO' = 'APPROVE';
     const vetoReasons: string[] = [];
 
-    // Structural stop calculation
     let stopLoss: number;
     let tp1: number;
     let tp2: number;
     let entryZone: [number, number];
 
     if (proposedDirection === 'BUY') {
-      entryZone = [Math.round((price - atr * 0.2) * 10000) / 10000, Math.round((price + atr * 0.1) * 10000) / 10000];
-      const structuralStop = ind.swingStructure.lastSwingLow;
-      stopLoss = Math.min(structuralStop, price - atr * 1.5);
-      const riskDist = price - stopLoss;
-      tp1 = Math.round((price + riskDist * 1.8) * 10000) / 10000;
-      tp2 = Math.round((price + riskDist * 2.8) * 10000) / 10000;
+      entryZone = [roundPrice(price - atr * 0.15), roundPrice(price + atr * 0.1)];
+      const swingStop = ind.swingStructure.lastSwingLow < price ? ind.swingStructure.lastSwingLow - atr * 0.25 : price - atr * 1.4;
+      const clampedStopDist = Math.max(atr * 1.15, Math.min(atr * 2.4, price - swingStop));
+      stopLoss = roundPrice(price - clampedStopDist);
+      const riskDist = Math.max(atr * 0.5, price - stopLoss);
+
+      // Anchor TP1 to structural resistance / R2 if it offers >= 1.65 R:R, else 1.95x risk
+      const structuralTarget = Math.max(ind.pivots.r1, ind.bollingerBands.upper);
+      const rawTp1Dist = structuralTarget > price + riskDist * 1.6 ? Math.min(riskDist * 2.3, structuralTarget - price) : riskDist * 1.95;
+      tp1 = roundPrice(price + rawTp1Dist);
+      tp2 = roundPrice(price + riskDist * 2.9);
     } else if (proposedDirection === 'SELL') {
-      entryZone = [Math.round((price - atr * 0.1) * 10000) / 10000, Math.round((price + atr * 0.2) * 10000) / 10000];
-      const structuralStop = ind.swingStructure.lastSwingHigh;
-      stopLoss = Math.max(structuralStop, price + atr * 1.5);
-      const riskDist = stopLoss - price;
-      tp1 = Math.round((price - riskDist * 1.8) * 10000) / 10000;
-      tp2 = Math.round((price - riskDist * 2.8) * 10000) / 10000;
+      entryZone = [roundPrice(price - atr * 0.1), roundPrice(price + atr * 0.15)];
+      const swingStop = ind.swingStructure.lastSwingHigh > price ? ind.swingStructure.lastSwingHigh + atr * 0.25 : price + atr * 1.4;
+      const clampedStopDist = Math.max(atr * 1.15, Math.min(atr * 2.4, swingStop - price));
+      stopLoss = roundPrice(price + clampedStopDist);
+      const riskDist = Math.max(atr * 0.5, stopLoss - price);
+
+      const structuralTarget = Math.min(ind.pivots.s1, ind.bollingerBands.lower);
+      const rawTp1Dist = structuralTarget < price - riskDist * 1.6 ? Math.min(riskDist * 2.3, price - structuralTarget) : riskDist * 1.95;
+      tp1 = roundPrice(price - rawTp1Dist);
+      tp2 = roundPrice(price - riskDist * 2.9);
     } else {
-      entryZone = [price, price];
-      stopLoss = price - atr * 1.5;
-      tp1 = price + atr * 1.5;
-      tp2 = price + atr * 2.5;
+      entryZone = [roundPrice(price), roundPrice(price)];
+      stopLoss = roundPrice(price - atr * 1.5);
+      tp1 = roundPrice(price + atr * 1.5);
+      tp2 = roundPrice(price + atr * 2.5);
     }
 
     const riskDist = Math.abs(price - stopLoss);
@@ -604,6 +720,11 @@ export async function runRiskManagerAgent(
       vetoReasons.push(`Market flagged untradable by Volatility & Regime Specialist (${ind.regime})`);
     }
 
+    if (c.isEventBlackout) {
+      decision = 'VETO';
+      vetoReasons.push('High-impact economic event within active blackout window');
+    }
+
     if (riskReward < 1.5 && proposedDirection !== 'NEUTRAL') {
       decision = 'VETO';
       vetoReasons.push(`Risk-reward ratio ${riskReward} < minimum requirement 1.5`);
@@ -614,7 +735,7 @@ export async function runRiskManagerAgent(
       vetoReasons.push(`Stop distance (${(riskDist / atr).toFixed(1)} ATR) exceeds maximum 3.0 ATR limit`);
     }
 
-    if (Math.abs(ind.distEma20InAtr) > 2.0 && decision !== 'VETO') {
+    if (Math.abs(ind.distEma20InAtr) > 2.2 && decision !== 'VETO') {
       decision = 'REDUCE_SIZE';
     }
 
@@ -624,13 +745,15 @@ export async function runRiskManagerAgent(
       agent: 'Risk Manager',
       symbol: c.snapshot.symbol,
       direction: proposedDirection,
-      confidence: decision === 'APPROVE' ? 85 : 40,
-      timeframe_bias: { W1: proposedDirection, D1: proposedDirection, H4: proposedDirection, H1: proposedDirection, M15: proposedDirection },
+      confidence: decision === 'APPROVE' ? 86 : 40,
+      timeframe_bias: buildMtfBiasMap(c, proposedDirection, proposedDirection),
       key_levels: {
         support: [stopLoss, ind.pivots.s1],
         resistance: [tp1, tp2],
       },
-      reasoning: `Risk decision: ${decision}. Entry zone [${entryZone[0]}, ${entryZone[1]}], Stop loss ${stopLoss}, TP1 ${tp1} (R:R ${riskReward}). Size modifier: ${sizeModifier}x. ${vetoReasons.length > 0 ? `Veto reasons: ${vetoReasons.join('; ')}` : 'Structural parameters validated.'}`,
+      reasoning: `Risk decision: ${decision}. Entry zone [${entryZone[0]}, ${entryZone[1]}], Stop loss ${stopLoss}, TP1 ${tp1} (R:R ${riskReward}). Size modifier: ${sizeModifier}x. ${
+        vetoReasons.length > 0 ? `Veto reasons: ${vetoReasons.join('; ')}` : 'Structural MAE parameters validated.'
+      }`,
       evidence: [
         {
           source: 'kb_doc',

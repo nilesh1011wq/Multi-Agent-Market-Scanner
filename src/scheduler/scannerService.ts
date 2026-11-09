@@ -91,6 +91,16 @@ class ScannerService {
       return noTradeOpp;
     }
 
+    // Check economic calendar for active high-impact blackout affecting symbol currencies
+    const calendar = await marketDataService.getEconomicCalendar();
+    const nowTs = Date.now();
+    const isEventBlackout = calendar.some(
+      (ev) =>
+        ev.impact === 'HIGH' &&
+        Math.abs(nowTs - ev.scheduledTime) <= ev.blackoutMins * 60000 &&
+        (symbol.includes(ev.currency) || ev.currency === 'USD')
+    );
+
     // Run Full 3-Round Specialist Debate & Chief Arbiter Synthesis
     const agentScorecards = scorecardService.getScorecards(symbol, timeframe);
     const debate = await runFullDebate({
@@ -98,6 +108,7 @@ class ScannerService {
       analogs,
       cot,
       agentScorecards,
+      isEventBlackout,
     });
 
     const arb = debate.arbiter;

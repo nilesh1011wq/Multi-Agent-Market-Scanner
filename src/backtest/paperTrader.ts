@@ -170,21 +170,25 @@ class PaperTrader {
       const simulatedPrice = latestPrice * (1 + randomFactor);
       pos.currentPrice = Math.round(simulatedPrice * 100000) / 100000;
 
-      const riskDist = Math.abs(pos.entryPrice - pos.stopLoss);
+      const initialRiskDist =
+        Math.abs(pos.entryPrice - pos.stopLoss) > 1e-6
+          ? Math.abs(pos.entryPrice - pos.stopLoss)
+          : Math.max(1e-5, Math.abs(pos.takeProfit1 - pos.entryPrice));
       const hadHitTp1 = pos.status === 'TP1_HIT';
 
       if (pos.direction === 'BUY') {
         pos.unrealizedPnLR =
-          riskDist > 0 ? (pos.currentPrice - pos.entryPrice) / riskDist : 0;
+          initialRiskDist > 0 ? (pos.currentPrice - pos.entryPrice) / initialRiskDist : 0;
 
         // Check TP2 (Full Win)
         if (pos.currentPrice >= pos.takeProfit2) {
+          const priorBankedR = hadHitTp1 ? pos.realizedPnLR : 0;
           pos.status = 'TP2_HIT';
           pos.closedAt = Date.now();
           pos.exitPrice = pos.takeProfit2;
           pos.realizedPnLR = pos.riskReward; // e.g. +2.2R
           pos.unrealizedPnLR = 0;
-          this.balance += pos.realizedPnLR * 100;
+          this.balance += (pos.realizedPnLR - priorBankedR) * 100;
           resolved.push(pos);
           this.feedResolutionToScorecard(pos);
           continue;
@@ -194,19 +198,19 @@ class PaperTrader {
         if (pos.currentPrice >= pos.takeProfit1 && pos.status === 'ACTIVE') {
           pos.status = 'TP1_HIT';
           pos.stopLoss = pos.entryPrice; // Move SL to Breakeven
-          pos.realizedPnLR += 1.0; // Bank +1R on scaled portion
+          pos.realizedPnLR = 1.0; // Bank +1R on scaled portion
           this.balance += 100;
           pos.notes = 'TP1 reached: +1.0R locked, Stop Loss shifted to Breakeven.';
         }
 
         // Check Stop Loss
         if (pos.currentPrice <= pos.stopLoss) {
-          pos.status = 'STOPPED_OUT';
+          pos.status = hadHitTp1 ? 'TP1_HIT' : 'STOPPED_OUT';
           pos.closedAt = Date.now();
           pos.exitPrice = pos.stopLoss;
-          pos.realizedPnLR = hadHitTp1 ? 0.0 : -1.0;
+          pos.realizedPnLR = hadHitTp1 ? 1.0 : -1.0;
           pos.unrealizedPnLR = 0;
-          this.balance += (pos.realizedPnLR === -1.0 ? -100 : 0);
+          this.balance += hadHitTp1 ? 0 : -100;
           resolved.push(pos);
           this.feedResolutionToScorecard(pos);
           continue;
@@ -214,16 +218,17 @@ class PaperTrader {
       } else {
         // SELL
         pos.unrealizedPnLR =
-          riskDist > 0 ? (pos.entryPrice - pos.currentPrice) / riskDist : 0;
+          initialRiskDist > 0 ? (pos.entryPrice - pos.currentPrice) / initialRiskDist : 0;
 
         // Check TP2 (Full Win)
         if (pos.currentPrice <= pos.takeProfit2) {
+          const priorBankedR = hadHitTp1 ? pos.realizedPnLR : 0;
           pos.status = 'TP2_HIT';
           pos.closedAt = Date.now();
           pos.exitPrice = pos.takeProfit2;
           pos.realizedPnLR = pos.riskReward;
           pos.unrealizedPnLR = 0;
-          this.balance += pos.realizedPnLR * 100;
+          this.balance += (pos.realizedPnLR - priorBankedR) * 100;
           resolved.push(pos);
           this.feedResolutionToScorecard(pos);
           continue;
@@ -233,19 +238,19 @@ class PaperTrader {
         if (pos.currentPrice <= pos.takeProfit1 && pos.status === 'ACTIVE') {
           pos.status = 'TP1_HIT';
           pos.stopLoss = pos.entryPrice; // Breakeven
-          pos.realizedPnLR += 1.0;
+          pos.realizedPnLR = 1.0;
           this.balance += 100;
           pos.notes = 'TP1 reached: +1.0R locked, Stop Loss shifted to Breakeven.';
         }
 
         // Check Stop Loss
         if (pos.currentPrice >= pos.stopLoss) {
-          pos.status = 'STOPPED_OUT';
+          pos.status = hadHitTp1 ? 'TP1_HIT' : 'STOPPED_OUT';
           pos.closedAt = Date.now();
           pos.exitPrice = pos.stopLoss;
-          pos.realizedPnLR = hadHitTp1 ? 0.0 : -1.0;
+          pos.realizedPnLR = hadHitTp1 ? 1.0 : -1.0;
           pos.unrealizedPnLR = 0;
-          this.balance += (pos.realizedPnLR === -1.0 ? -100 : 0);
+          this.balance += hadHitTp1 ? 0 : -100;
           resolved.push(pos);
           this.feedResolutionToScorecard(pos);
           continue;

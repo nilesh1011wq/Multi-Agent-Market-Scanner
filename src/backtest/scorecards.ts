@@ -101,7 +101,7 @@ class ScorecardService {
    * Runs walk-forward backtest across candles and updates agent scorecards.
    */
   public runBacktest(symbol: string, timeframe: Timeframe) {
-    const candles = generateRealisticCandles(symbol, timeframe, 180);
+    const candles = generateRealisticCandles(symbol, timeframe, 220);
     const updatedScorecards: Record<AgentName, AgentScorecard> = {} as any;
 
     for (const name of SPECIALIST_NAMES) {
@@ -158,12 +158,17 @@ class ScorecardService {
       sc.hitRate = Math.round((sc.wins / sc.resolvedTrades) * 100) / 100;
       sc.avgR = Math.round(((sc.avgR * (sc.resolvedTrades - 1) + actualR) / sc.resolvedTrades) * 100) / 100;
 
+      // Live/Paper trade resolutions are out-of-sample observations
+      const oosOutcome = outcome === 'WIN' ? 1 : 0;
+      sc.outOfSampleHitRate = Math.round(((sc.outOfSampleHitRate * 14 + oosOutcome) / 15) * 100) / 100;
+      sc.evidenceQualityBadge = sc.resolvedTrades >= 30 ? 'A' : 'B';
+
       // Bayesian weight update
       if (sc.resolvedTrades >= 30) {
         const oosRatio = sc.outOfSampleHitRate / 0.50;
         const rFactor = 1 + Math.max(-0.4, Math.min(0.4, sc.avgR * 0.15));
         sc.currentWeight = Math.round(oosRatio * rFactor * 100) / 100;
-        sc.currentWeight = Math.max(0.3, Math.min(2.5, sc.currentWeight));
+        sc.currentWeight = Math.max(0.4, Math.min(2.2, sc.currentWeight));
       } else {
         sc.currentWeight = 0.7; // Unproven cap
       }

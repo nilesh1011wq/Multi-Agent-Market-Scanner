@@ -70,7 +70,7 @@ export async function executeTrendAgent(input: TrendAgentInput): Promise<BaseAge
 
       // 6-second timeout race to ensure fast responsive latency
       const geminiCall = ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-2.5-flash',
         contents: JSON.stringify(payload),
         config: {
           systemInstruction: TREND_MOMENTUM_PROMPT,
@@ -120,18 +120,28 @@ function generateDeterministicTrendOutput(
   let confidence = 50;
   let invalidationLevel = ind.ema50;
 
-  // Rule: If ADX < 20 or regime is chop/range, output NEUTRAL or low confidence
-  if (ind.adx14 < 20 || ind.regime === 'chop') {
+  // Rule: If ADX < 18 or regime is chop, output NEUTRAL or low confidence
+  if (ind.adx14 < 18 || ind.regime === 'chop') {
     direction = 'NEUTRAL';
     confidence = 45;
     invalidationLevel = ind.bollingerBands.middle;
-  } else if (ind.emaStack === 'BULLISH' && ind.adx14 >= 25 && ind.macd.histogram >= 0) {
+  } else if (
+    (ind.emaStack === 'BULLISH' || (ind.ema20 > ind.ema50 && price > ind.ema50)) &&
+    ind.adx14 >= 20 &&
+    ind.macd.histogram >= -0.0002 &&
+    ind.distEma20InAtr <= 2.3
+  ) {
     direction = 'BUY';
-    confidence = Math.min(78, 65 + Math.round(ind.adx14 * 0.3));
+    confidence = Math.min(82, 66 + Math.round(ind.adx14 * 0.35));
     invalidationLevel = ind.ema50;
-  } else if (ind.emaStack === 'BEARISH' && ind.adx14 >= 25 && ind.macd.histogram <= 0) {
+  } else if (
+    (ind.emaStack === 'BEARISH' || (ind.ema20 < ind.ema50 && price < ind.ema50)) &&
+    ind.adx14 >= 20 &&
+    ind.macd.histogram <= 0.0002 &&
+    ind.distEma20InAtr >= -2.3
+  ) {
     direction = 'SELL';
-    confidence = Math.min(78, 65 + Math.round(ind.adx14 * 0.3));
+    confidence = Math.min(82, 66 + Math.round(ind.adx14 * 0.35));
     invalidationLevel = ind.ema50;
   } else {
     direction = 'NEUTRAL';

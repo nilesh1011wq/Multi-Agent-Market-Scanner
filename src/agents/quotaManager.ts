@@ -20,7 +20,7 @@ class QuotaManager {
   private exhaustedUntil: number = 0;
   private retryAfterSeconds: number | null = null;
   private metric: string | null = null;
-  private defaultModel: string = 'gemini-3.8-flash';
+  private defaultModel: string = 'gemini-2.5-flash';
   private hasLoggedSwitch: boolean = false;
 
   constructor() {
@@ -144,7 +144,7 @@ class QuotaManager {
         ? `Deterministic Quant Solver Active (Gemini free-tier quota exhausted, resets in ${Math.round(
             (remainingSec || 0) / 60
           )}m)`
-        : 'Gemini 3.8 Flash Specialist Ensemble Active',
+        : 'Gemini 2.5 Flash Specialist Ensemble Active',
     };
   }
 

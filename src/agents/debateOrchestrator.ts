@@ -62,11 +62,26 @@ export async function executeRound1(context: SpecialistRunContext): Promise<Reco
     runPositioningAgent(context),
   ]);
 
-  // Aggregate tentative direction for Risk Manager
-  const votes = [tentativeTrend.direction, meanRev.direction, priceAction.direction, structure.direction, macro.direction];
-  const buyVotes = votes.filter((v) => v === 'BUY').length;
-  const sellVotes = votes.filter((v) => v === 'SELL').length;
-  const proposedDirection: TradeDirection = buyVotes > sellVotes ? 'BUY' : sellVotes > buyVotes ? 'SELL' : 'NEUTRAL';
+  // Aggregate tentative direction for Risk Manager across all 9 directional specialists
+  const allDirectional = [
+    tentativeTrend,
+    meanRev,
+    priceAction,
+    volatility,
+    structure,
+    macro,
+    news,
+    intermarket,
+    positioning,
+  ];
+  const buyScore = allDirectional
+    .filter((v) => v.direction === 'BUY')
+    .reduce((acc, v) => acc + v.confidence, 0);
+  const sellScore = allDirectional
+    .filter((v) => v.direction === 'SELL')
+    .reduce((acc, v) => acc + v.confidence, 0);
+  const proposedDirection: TradeDirection =
+    buyScore > sellScore * 1.1 ? 'BUY' : sellScore > buyScore * 1.1 ? 'SELL' : tentativeTrend.direction;
 
   // Run Risk Manager with proposed setup
   const riskManager = await runRiskManagerAgent(context, proposedDirection);
@@ -101,42 +116,58 @@ export async function executeRound2(
   for (const name of agentNames) {
     const ownR1 = round1Outputs[name];
 
-    // Find the agent with the highest divergence (disagreement)
-    let disagreeAgent: AgentName = 'Risk Manager';
+    // Find the agent with the strongest opposing conviction & strongest aligned conviction
+    let disagreeAgent: AgentName = name === 'Risk Manager' ? 'Trend & Momentum' : 'Risk Manager';
     let disagreeReason = 'Conservative risk parameters conflict with directional trend aggression.';
-    let convincedAgent: AgentName = 'Price Action & S/R';
+    let maxDisagreeConf = -1;
+
+    let convincedAgent: AgentName = name === 'Price Action & S/R' ? 'Market Structure & Volume' : 'Price Action & S/R';
     let convincedReason = 'Confluence of multi-timeframe horizontal support and touch counts confirms setup boundaries.';
+    let maxConvincedConf = -1;
 
     for (const otherName of agentNames) {
       if (otherName === name) continue;
       const otherR1 = round1Outputs[otherName];
 
-      if (ownR1.direction !== 'NEUTRAL' && otherR1.direction !== 'NEUTRAL' && ownR1.direction !== otherR1.direction) {
+      if (
+        ownR1.direction !== 'NEUTRAL' &&
+        otherR1.direction !== 'NEUTRAL' &&
+        ownR1.direction !== otherR1.direction &&
+        otherR1.confidence > maxDisagreeConf
+      ) {
+        maxDisagreeConf = otherR1.confidence;
         disagreeAgent = otherName;
-        disagreeReason = `${otherName} favors ${otherR1.direction} while my model identifies structural ${ownR1.direction} evidence.`;
-      } else if (ownR1.direction === otherR1.direction && otherR1.confidence > 70) {
+        disagreeReason = `${otherName} favors ${otherR1.direction} (${otherR1.confidence}%) citing ${otherR1.evidence[0]?.claim ?? 'opposing structure'}, whereas my model identifies ${ownR1.direction}.`;
+      } else if (
+        ownR1.direction === otherR1.direction &&
+        otherR1.confidence > maxConvincedConf
+      ) {
+        maxConvincedConf = otherR1.confidence;
         convincedAgent = otherName;
-        convincedReason = `${otherName} validates setup with high confidence (${otherR1.confidence}%) citing ${otherR1.evidence[0]?.claim ?? 'indicators'}.`;
+        convincedReason = `${otherName} validates ${ownR1.direction} thesis with ${otherR1.confidence}% confidence citing ${otherR1.evidence[0]?.claim ?? 'aligned indicators'}.`;
       }
     }
 
-    // Agents revise only if high-impact contradiction exists
-    const shouldRevise = round1Outputs['Volatility & Regime'].direction === 'NEUTRAL' && ownR1.confidence > 80;
+    // Agents revise if Volatility & Regime flags chop or if Risk Manager vetoes an overextended setup
+    const riskR1 = round1Outputs['Risk Manager'] as RiskManagerOutput;
+    const shouldRevise =
+      (round1Outputs['Volatility & Regime'].direction === 'NEUTRAL' && ownR1.confidence > 80) ||
+      (riskR1.decision === 'VETO' && ownR1.confidence > 82 && name !== 'Risk Manager');
 
     round2Map[name] = {
       ...ownR1,
       disagrees_with: {
         agent: disagreeAgent,
-        reason: disagreeReason,
+        reason: disagreeReason.slice(0, 230),
       },
       convinced_by: {
         agent: convincedAgent,
-        reason: convincedReason,
+        reason: convincedReason.slice(0, 230),
       },
       revised: shouldRevise,
       revision_reason: shouldRevise
-        ? 'Moderated confidence in deference to Volatility & Regime caution on chop conditions.'
-        : 'Holding analytical stance: evidence from snapshot and analog sample size remains intact.',
+        ? 'Moderated confidence in deference to Volatility & Regime / Risk Manager structural caution.'
+        : 'Holding analytical stance: evidence from quantitative snapshot and historical analog distribution remains intact.',
       confidence: shouldRevise ? Math.round(ownR1.confidence * 0.85) : ownR1.confidence,
     };
   }
@@ -154,9 +185,8 @@ export async function executeChiefArbiter(
   round2: Record<AgentName, Round2AgentOutput>,
   options: DebateOptions
 ): Promise<ArbiterOutput> {
-  const { snapshot, analogs, isEventBlackout, agentScorecards } = options;
+  const { snapshot, mtfSnapshot, analogs, isEventBlackout, agentScorecards } = options;
   const riskMgr = round1['Risk Manager'] as RiskManagerOutput;
-  const volRegime = round1['Volatility & Regime'];
 
   // Evidence Quality Badge determination
   let badge: 'A' | 'B' | 'C' = 'B';
@@ -180,8 +210,12 @@ export async function executeChiefArbiter(
     let weight = scorecard ? (scorecard.resolvedTrades >= 30 ? scorecard.currentWeight : 0.7) : 1.0;
 
     // Regimes weight alignment: trend agents boosted in trends, mean-rev in ranges
-    if (snapshot.indicators.regime.includes('trend') && agentName === 'Trend & Momentum') weight *= 1.3;
-    if (snapshot.indicators.regime === 'range' && agentName === 'Mean Reversion') weight *= 1.3;
+    if (snapshot.indicators.regime.includes('trend')) {
+      if (agentName === 'Trend & Momentum' || agentName === 'Market Structure & Volume') weight *= 1.25;
+    }
+    if (snapshot.indicators.regime === 'range') {
+      if (agentName === 'Mean Reversion' || agentName === 'Price Action & S/R') weight *= 1.25;
+    }
 
     const confFactor = r2.confidence / 100;
     const finalVoteWeight = weight * confFactor;
@@ -213,12 +247,12 @@ export async function executeChiefArbiter(
   } else if (isEventBlackout) {
     finalRecommendation = 'NO_TRADE';
     rationale = 'High-impact economic calendar event blackout window is active. Trade entries are blocked to prevent spread-widening slip stops.';
-  } else if (bullWeight > bearWeight * 1.4 && bullWeight > neutralWeight) {
+  } else if (bullWeight > bearWeight * 1.35 && bullWeight > neutralWeight) {
     finalRecommendation = 'BUY';
-    rationale = `Bullish consensus formed with strong multi-agent confirmation. Trend & Momentum, Market Structure, and Intermarket analysts align with +${analogs.avgMoveInAtr} ATR historical edge.`;
-  } else if (bearWeight > bullWeight * 1.4 && bearWeight > neutralWeight) {
+    rationale = `Bullish consensus formed with strong multi-agent confirmation (Weighted Bull ${bullWeight.toFixed(2)} vs Bear ${bearWeight.toFixed(2)}). Trend, Structure, and Intermarket analysts align with +${analogs.avgMoveInAtr} ATR historical edge.`;
+  } else if (bearWeight > bullWeight * 1.35 && bearWeight > neutralWeight) {
     finalRecommendation = 'SELL';
-    rationale = `Bearish consensus established across agents citing negative EMA stack and structural resistance retests.`;
+    rationale = `Bearish consensus established across agents (Weighted Bear ${bearWeight.toFixed(2)} vs Bull ${bullWeight.toFixed(2)}) citing negative EMA stack and structural resistance rejection.`;
   } else {
     finalRecommendation = 'NO_TRADE';
     rationale = 'Debate concluded with split or inconclusive consensus between trend and mean-reversion factions. Standing aside.';
@@ -227,26 +261,44 @@ export async function executeChiefArbiter(
   // Consensus level calculation
   const maxScore = Math.max(bullWeight, bearWeight, neutralWeight);
   const consensusLevel: 'strong' | 'moderate' | 'split' =
-    maxScore / (totalWeight || 1) > 0.65 ? 'strong' : maxScore / (totalWeight || 1) > 0.45 ? 'moderate' : 'split';
+    maxScore / (totalWeight || 1) > 0.62 ? 'strong' : maxScore / (totalWeight || 1) > 0.45 ? 'moderate' : 'split';
 
   // Calibrate confidence
-  let confidence = Math.round((maxScore / (totalWeight || 1)) * 85);
+  let confidence = Math.round((maxScore / (totalWeight || 1)) * 88);
   if (finalRecommendation === 'NO_TRADE') confidence = 50;
   if (badge === 'C') confidence = Math.min(65, confidence); // Capped at 65 on weak evidence
 
   // Timeframe alignment
   const ind = snapshot.indicators;
+  const tfSnap = mtfSnapshot?.timeframes;
+  const d1Bias: TradeDirection = tfSnap?.D1
+    ? tfSnap.D1.ema20 >= tfSnap.D1.ema50
+      ? 'BUY'
+      : 'SELL'
+    : ind.emaStack === 'BULLISH'
+    ? 'BUY'
+    : ind.emaStack === 'BEARISH'
+    ? 'SELL'
+    : 'NEUTRAL';
+  const h4Bias: TradeDirection = tfSnap?.H4
+    ? tfSnap.H4.ema20 >= tfSnap.H4.ema50
+      ? 'BUY'
+      : 'SELL'
+    : ind.distEma20InAtr >= 0
+    ? 'BUY'
+    : 'SELL';
+
   const timeframeAlignment: 'aligned' | 'partial' | 'conflicting' =
-    ind.emaStack === 'MIXED' ? 'conflicting' : ind.adx14 >= 25 ? 'aligned' : 'partial';
+    ind.emaStack === 'MIXED' ? 'conflicting' : ind.adx14 >= 24 ? 'aligned' : 'partial';
 
   return {
     symbol: snapshot.symbol,
     per_timeframe: {
-      W1: { bias: ind.emaStack === 'BULLISH' ? 'BUY' : ind.emaStack === 'BEARISH' ? 'SELL' : 'NEUTRAL', confidence: 65 },
-      D1: { bias: ind.emaStack === 'BULLISH' ? 'BUY' : ind.emaStack === 'BEARISH' ? 'SELL' : 'NEUTRAL', confidence: 70 },
-      H4: { bias: ind.distEma20InAtr > 0 ? 'BUY' : 'SELL', confidence: 68 },
+      W1: { bias: d1Bias, confidence: 68 },
+      D1: { bias: d1Bias, confidence: 72 },
+      H4: { bias: h4Bias, confidence: 70 },
       H1: { bias: finalRecommendation === 'NO_TRADE' ? 'NEUTRAL' : finalRecommendation, confidence },
-      M15: { bias: 'NEUTRAL', confidence: 50 },
+      M15: { bias: h4Bias, confidence: 60 },
     },
     final_recommendation: finalRecommendation,
     trade_timeframe: snapshot.timeframe,
@@ -261,7 +313,7 @@ export async function executeChiefArbiter(
     strongest_bull_case: `Synchronized momentum stack with structural support holding at ${ind.pivots.s1}. Analogs show +${analogs.avgMoveInAtr} ATR continuation.`,
     strongest_bear_case: `Overextension from mean with COT non-commercial exposure near decile boundaries; risk of liquidity hunt below ${ind.swingStructure.lastSwingLow}.`,
     key_disagreement: 'Trend continuation follow-through vs Mean Reversion snap-back at range boundary.',
-    invalidation: `Candle close breaching ${riskMgr.stop_loss} or regime shift to chop.`,
+    invalidation: `${riskMgr.stop_loss} structural stop breach or regime shift to chop.`,
     evidence_quality: {
       analog_sample_size: analogs.sampleSize,
       regime_match: analogs.regimeMatch,
@@ -279,12 +331,14 @@ export async function executeChiefArbiter(
  * Executes Round 1 -> Round 2 -> Round 3, saves debate transcript, and returns full outcome.
  */
 export async function runFullDebate(options: DebateOptions): Promise<FullDebateTranscript> {
-  const { snapshot, analogs, cot } = options;
+  const { snapshot, mtfSnapshot, analogs, cot, isEventBlackout } = options;
 
   const context: SpecialistRunContext = {
     snapshot,
+    mtfSnapshot,
     analogs,
     cot,
+    isEventBlackout,
   };
 
   // Round 1: 10 parallel independent analyses
