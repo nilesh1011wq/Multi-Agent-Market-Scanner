@@ -524,7 +524,7 @@ export class CapitalComAdapter implements IBrokerAdapter {
   }
 
   public async getOpenPositions(): Promise<BrokerPosition[]> {
-    const { apiKey, environment } = this.resolveCredentials();
+    const { apiKey, environment, hasValidCreds } = this.resolveCredentials();
     const sess = await this.ensureSession();
 
     if (sess.connected && this.cstToken && this.xSecurityToken && apiKey) {
@@ -633,6 +633,12 @@ export class CapitalComAdapter implements IBrokerAdapter {
       } catch (err: any) {
         this.lastErrorMessage = `Capital.com positions network error: ${err.message}`;
       }
+    }
+
+    // When real Capital.com credentials are configured, do NOT leak simulated sandbox trades.
+    // Return exclusively verified live broker positions or empty array.
+    if (hasValidCreds) {
+      return Array.from(this.lastKnownLivePositions.values());
     }
 
     await this.refreshSandboxPositions();
@@ -985,12 +991,20 @@ export class CapitalComAdapter implements IBrokerAdapter {
   }
 
   public async closePosition(ticketId: string): Promise<{ success: boolean; message: string }> {
+    const cleanTicketId = ticketId.replace(/^cap-/i, '').replace(/^pos-/i, '').trim();
     const { apiKey, environment, hasValidCreds } = this.resolveCredentials();
     const sess = await this.ensureSession();
 
-    if (hasValidCreds && sess.connected && this.cstToken && this.xSecurityToken && apiKey) {
+    if (hasValidCreds) {
+      if (!sess.connected || !this.cstToken || !this.xSecurityToken || !apiKey) {
+        return {
+          success: false,
+          message: `Cannot close position #${cleanTicketId} on Capital.com: Broker session not authenticated (${sess.message}). Verify credentials in Broker Settings.`,
+        };
+      }
+
       try {
-        const res = await fetch(`${this.getBaseUrl()}/positions/${ticketId}`, {
+        const res = await fetch(`${this.getBaseUrl()}/positions/${cleanTicketId}`, {
           method: 'DELETE',
           headers: {
             'X-CAP-API-KEY': apiKey,
@@ -1000,21 +1014,44 @@ export class CapitalComAdapter implements IBrokerAdapter {
         });
 
         if (res.ok) {
-          const livePos = this.lastKnownLivePositions.get(ticketId);
+          const livePos =
+            this.lastKnownLivePositions.get(cleanTicketId) ||
+            this.lastKnownLivePositions.get(ticketId) ||
+            this.simulatedPositions.find((p) => p.brokerTicketId === cleanTicketId || p.brokerTicketId === ticketId);
+
           if (livePos) {
             this.recordClosedPosition(livePos, livePos.currentPrice, 'MANUALLY_CLOSED');
+            this.lastKnownLivePositions.delete(cleanTicketId);
             this.lastKnownLivePositions.delete(ticketId);
           }
+          this.simulatedPositions = this.simulatedPositions.filter(
+            (p) => p.brokerTicketId !== cleanTicketId && p.brokerTicketId !== ticketId
+          );
+
           return {
             success: true,
-            message: `Position ${ticketId} closed successfully on Capital.com ${environment} account.`,
+            message: `Position #${cleanTicketId} closed successfully on Capital.com ${environment} account.`,
           };
         } else {
           const errData = await res.json().catch(() => ({}));
           const errMsg = errData.errorCode || errData.message || `HTTP ${res.status}`;
+
+          // If position is already closed or deal not found on Capital.com, clean up cache cleanly
+          if (res.status === 404 || String(errMsg).includes('not.found')) {
+            this.lastKnownLivePositions.delete(cleanTicketId);
+            this.lastKnownLivePositions.delete(ticketId);
+            this.simulatedPositions = this.simulatedPositions.filter(
+              (p) => p.brokerTicketId !== cleanTicketId && p.brokerTicketId !== ticketId
+            );
+            return {
+              success: true,
+              message: `Position #${cleanTicketId} was already closed on Capital.com. Local cache synchronized.`,
+            };
+          }
+
           return {
             success: false,
-            message: `Capital.com rejected close for ${ticketId}: ${errMsg}.`,
+            message: `Capital.com rejected close for position #${cleanTicketId}: ${errMsg}.`,
           };
         }
       } catch (err: any) {
@@ -1025,14 +1062,17 @@ export class CapitalComAdapter implements IBrokerAdapter {
       }
     }
 
-    const idx = this.simulatedPositions.findIndex((p) => p.brokerTicketId === ticketId);
+    // Calibrated sandbox execution when no real broker credentials are configured
+    const idx = this.simulatedPositions.findIndex(
+      (p) => p.brokerTicketId === ticketId || p.brokerTicketId === cleanTicketId || p.id === ticketId
+    );
     if (idx !== -1) {
       const pos = this.simulatedPositions.splice(idx, 1)[0];
       const closed = this.recordClosedPosition(pos, pos.currentPrice, 'MANUALLY_CLOSED');
       this.simulatedBalance = Math.round((this.simulatedBalance + closed.realizedPnL) * 100) / 100;
       return {
         success: true,
-        message: `Position ${ticketId} closed at ${pos.currentPrice} (Realized PnL: $${closed.realizedPnL.toFixed(2)} / ${closed.realizedPnLR}R).`,
+        message: `Position ${pos.brokerTicketId} closed at ${pos.currentPrice} (Realized PnL: $${closed.realizedPnL.toFixed(2)} / ${closed.realizedPnLR}R).`,
       };
     }
     return { success: true, message: `Position ${ticketId} closed.` };
@@ -1042,7 +1082,16 @@ export class CapitalComAdapter implements IBrokerAdapter {
     const errors: string[] = [];
     let closedCount = 0;
 
+    const { hasValidCreds } = this.resolveCredentials();
     const positions = await this.getOpenPositions();
+
+    if (positions.length === 0) {
+      if (!hasValidCreds) {
+        this.simulatedPositions = [];
+      }
+      return { closedCount: 0, errors: [] };
+    }
+
     for (const pos of positions) {
       const res = await this.closePosition(pos.brokerTicketId);
       if (res.success) {
@@ -1052,7 +1101,10 @@ export class CapitalComAdapter implements IBrokerAdapter {
       }
     }
 
-    this.simulatedPositions = [];
+    if (!hasValidCreds) {
+      this.simulatedPositions = [];
+    }
+
     return { closedCount, errors };
   }
 }

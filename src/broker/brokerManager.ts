@@ -57,6 +57,7 @@ const ALL_SPECIALIST_AGENTS: AgentName[] = [
 class BrokerManager {
   private adapters: Record<BrokerId, IBrokerAdapter>;
   private auditLogs: ExecutionAuditLog[] = [];
+  private inFlightOrderSymbols: Set<string> = new Set();
   private lastExecutedSymbolTimestamps: Map<string, number> = new Map();
   private syncedClosedTicketIds: Set<string> = new Set();
   private dailyStartingEquity: Map<BrokerId, { dateKey: string; equity: number }> = new Map();
@@ -317,10 +318,17 @@ class BrokerManager {
       return null;
     }
 
-    // 5. Cooldown check: Prevent duplicate spam within 10 minutes on same symbol
-    const lastTime = this.lastExecutedSymbolTimestamps.get(arbiter.symbol) || 0;
+    // 5. Canonical symbol & duplicate checks
+    const targetSymbol = getTerminalSymbolFromBroker(arbiter.symbol, activeConf.id);
+    if (this.inFlightOrderSymbols.has(targetSymbol)) {
+      console.log(`[BrokerManager] Order already in-flight for ${targetSymbol}. Skipping duplicate.`);
+      return null;
+    }
+
+    // Cooldown check: Prevent duplicate spam within 10 minutes on same symbol
+    const lastTime = this.lastExecutedSymbolTimestamps.get(targetSymbol) || 0;
     if (Date.now() - lastTime < 10 * 60 * 1000) {
-      console.log(`[BrokerManager] Auto-execution cooldown active for ${arbiter.symbol}`);
+      console.log(`[BrokerManager] Auto-execution cooldown active for ${targetSymbol}`);
       return null;
     }
 
@@ -340,7 +348,6 @@ class BrokerManager {
     }
 
     // 6b. Duplicate symbol check (Strict institutional rule: maximum 1 trade per instrument)
-    const targetSymbol = getTerminalSymbolFromBroker(arbiter.symbol, activeConf.id);
     if (
       openPositions.some(
         (p) => getTerminalSymbolFromBroker(p.symbol, p.brokerId) === targetSymbol
@@ -427,10 +434,15 @@ class BrokerManager {
       source: 'AUTO_ARBITER',
     };
 
-    console.log(`[BrokerManager] Executing Auto-Trade on ${activeConf.name}:`, orderRequest);
-    const result = await adapter.placeOrder(orderRequest);
-
-    this.lastExecutedSymbolTimestamps.set(arbiter.symbol, Date.now());
+    let result: BrokerOrderResult;
+    this.inFlightOrderSymbols.add(targetSymbol);
+    try {
+      console.log(`[BrokerManager] Executing Auto-Trade on ${activeConf.name}:`, orderRequest);
+      result = await adapter.placeOrder(orderRequest);
+      this.lastExecutedSymbolTimestamps.set(targetSymbol, Date.now());
+    } finally {
+      this.inFlightOrderSymbols.delete(targetSymbol);
+    }
 
     // Record audit log
     const log: ExecutionAuditLog = {
@@ -515,6 +527,22 @@ class BrokerManager {
 
     // Strict institutional limit: Maximum 1 open trade per instrument allowed
     const targetSymbol = getTerminalSymbolFromBroker(order.symbol, order.brokerId);
+    if (this.inFlightOrderSymbols.has(targetSymbol)) {
+      return {
+        success: false,
+        brokerId: order.brokerId,
+        symbol: order.symbol,
+        direction: order.direction,
+        units: order.units,
+        fillPrice: 0,
+        stopLoss: order.stopLoss,
+        takeProfit: order.takeProfit1,
+        timestamp: Date.now(),
+        status: 'REJECTED',
+        message: `Order rejected: An order for ${targetSymbol} is already currently in-flight. Strict 1 trade per instrument rule enforced.`,
+      };
+    }
+
     const openPositions = await adapter.getOpenPositions();
     const existing = openPositions.find(
       (p) => getTerminalSymbolFromBroker(p.symbol, p.brokerId) === targetSymbol
@@ -553,7 +581,14 @@ class BrokerManager {
       order.entryPrice = refEntryPrice;
     }
 
-    const result = await adapter.placeOrder(order);
+    let result: BrokerOrderResult;
+    this.inFlightOrderSymbols.add(targetSymbol);
+    try {
+      result = await adapter.placeOrder(order);
+      this.lastExecutedSymbolTimestamps.set(targetSymbol, Date.now());
+    } finally {
+      this.inFlightOrderSymbols.delete(targetSymbol);
+    }
 
     const log: ExecutionAuditLog = {
       id: `audit-${Date.now()}`,

@@ -50,8 +50,8 @@ export default function App() {
       environment: 'DEMO',
       apiKey: '',
       isActive: true,
-      isAutoExecutionEnabled: true,
-      status: 'CONNECTED',
+      isAutoExecutionEnabled: false,
+      status: 'DISCONNECTED',
     },
     MT5: {
       id: 'MT5',
@@ -406,10 +406,18 @@ export default function App() {
         body: JSON.stringify({ brokerId: activeBrokerId, ticketId }),
       });
       if (res.success && res.data?.success) {
+        setBrokerNotification(`✅ Position #${ticketId} closed successfully on ${activeBrokerId}.`);
+        setTimeout(() => setBrokerNotification(null), 5000);
         await refreshBrokerData();
+      } else {
+        const errMsg = res.data?.message || res.error || 'Failed to close position on broker.';
+        setBrokerNotification(`❌ Failed to close position #${ticketId}: ${errMsg}`);
+        setTimeout(() => setBrokerNotification(null), 8000);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to close position:', err);
+      setBrokerNotification(`❌ Error closing position #${ticketId}: ${err?.message || 'Network error'}`);
+      setTimeout(() => setBrokerNotification(null), 8000);
     }
   };
 
@@ -434,10 +442,25 @@ export default function App() {
     try {
       const res = await safeFetchJson('/api/broker/flatten-all', { method: 'POST' });
       if (res.success && res.data?.success) {
+        const count = res.data.closedCount ?? 0;
+        const errors: string[] = res.data.errors || [];
+        if (errors.length > 0) {
+          setBrokerNotification(`⚠️ Flattened ${count} positions, but errors occurred: ${errors.join('; ')}`);
+          setTimeout(() => setBrokerNotification(null), 8000);
+        } else {
+          setBrokerNotification(`✅ Successfully flattened all positions (${count} closed) on ${activeBrokerId}.`);
+          setTimeout(() => setBrokerNotification(null), 6000);
+        }
         await refreshBrokerData();
+      } else {
+        const errMsg = res.data?.message || res.error || 'Failed to flatten positions on broker.';
+        setBrokerNotification(`❌ Flatten All failed: ${errMsg}`);
+        setTimeout(() => setBrokerNotification(null), 8000);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to flatten positions:', err);
+      setBrokerNotification(`❌ Error flattening positions: ${err?.message || 'Network error'}`);
+      setTimeout(() => setBrokerNotification(null), 8000);
     }
   };
 
@@ -736,21 +759,33 @@ export default function App() {
         engineMessage={engineMessage}
         activeBrokerName={brokerConfigs[activeBrokerId]?.name || 'Capital.com'}
         activeBrokerEnvironment={brokerConfigs[activeBrokerId]?.environment || 'DEMO'}
-        isAutoExecutionEnabled={brokerConfigs[activeBrokerId]?.isAutoExecutionEnabled ?? true}
+        isAutoExecutionEnabled={brokerConfigs[activeBrokerId]?.isAutoExecutionEnabled ?? false}
         brokerPositionsCount={brokerPositions.length}
         onOpenManualTicket={() => openManualBrokerTicket()}
       />
 
       {/* Broker Auto-Execution / Alert Notification Banner */}
       {brokerNotification && (
-        <div className="bg-emerald-950/95 border-b border-emerald-800 text-emerald-200 px-4 py-2 text-xs font-mono flex items-center justify-between z-30 shadow-lg">
+        <div className={`border-b px-4 py-2 text-xs font-mono flex items-center justify-between z-30 shadow-lg ${
+          brokerNotification.startsWith('❌')
+            ? 'bg-rose-950/95 border-rose-800 text-rose-200'
+            : brokerNotification.startsWith('⚠️')
+            ? 'bg-amber-950/95 border-amber-800 text-amber-200'
+            : 'bg-emerald-950/95 border-emerald-800 text-emerald-200'
+        }`}>
           <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+            <span className={`w-2 h-2 rounded-full ${
+              brokerNotification.startsWith('❌')
+                ? 'bg-rose-400'
+                : brokerNotification.startsWith('⚠️')
+                ? 'bg-amber-400'
+                : 'bg-emerald-400 animate-ping'
+            }`} />
             <span className="font-bold">{brokerNotification}</span>
           </div>
           <button
             onClick={() => setBrokerNotification(null)}
-            className="text-emerald-400 hover:text-white p-1"
+            className="hover:text-white p-1 text-slate-400 transition-colors cursor-pointer"
           >
             ✕
           </button>

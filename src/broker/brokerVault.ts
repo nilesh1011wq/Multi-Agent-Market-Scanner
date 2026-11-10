@@ -66,7 +66,7 @@ export function getDefaultBrokerConfigs(): Record<BrokerId, BrokerConfig> {
       apiSecret: '',
       identifier: '',
       isActive: true,
-      isAutoExecutionEnabled: true,
+      isAutoExecutionEnabled: false,
       defaultRiskPct: 1.0,
       maxPortfolioHeatPct: 3.0,
       maxDailyDrawdownPct: 3.0,
