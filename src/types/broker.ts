@@ -157,5 +157,8 @@ export interface IBrokerAdapter {
   ): Promise<{ success: boolean; message: string }>;
   closePosition(ticketId: string): Promise<{ success: boolean; message: string }>;
   flattenAll(): Promise<{ closedCount: number; errors: string[] }>;
+  getLastKnownLivePositions?(): BrokerPosition[];
+  registerKnownLivePosition?(pos: BrokerPosition): void;
 }
+
 

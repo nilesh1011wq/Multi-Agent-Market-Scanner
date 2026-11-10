@@ -185,11 +185,19 @@ class BrokerManager {
     const activeConf = brokerVault.getActiveBroker();
     const adapter = this.getActiveAdapter();
 
-    const [rawSummary, openPositions, closedPositions] = await Promise.all([
+    const [rawSummary, initialOpenPositions, closedPositions] = await Promise.all([
       adapter.getAccountSummary(),
       adapter.getOpenPositions(),
       adapter.getClosedPositions(),
     ]);
+
+    let openPositions = initialOpenPositions;
+    if (openPositions.length === 0 && typeof adapter.getLastKnownLivePositions === 'function') {
+      openPositions = adapter.getLastKnownLivePositions();
+    }
+    if (openPositions.length === 0) {
+      openPositions = this.reconstructActivePositionsFromAudit();
+    }
 
     this.syncClosedTradesToBayesianScorecards(closedPositions);
 
@@ -260,11 +268,16 @@ class BrokerManager {
       activeConf.errorMessage ||
       (typeof (adapter as any).getLastErrorMessage === 'function' ? (adapter as any).getLastErrorMessage() : undefined);
 
+    const effectiveOpenPositionsCount = Math.max(
+      rawSummary.openPositionsCount || 0,
+      openPositions.length
+    );
+
     return {
       ...rawSummary,
       connectionStatus: effectiveStatus,
       lastErrorMessage: effectiveError,
-      openPositionsCount: openPositions.length,
+      openPositionsCount: effectiveOpenPositionsCount,
       realizedPnL: Number(realizedPnL.toFixed(2)),
       realizedPnLR: Number(realizedPnLR.toFixed(2)),
       winRate,
@@ -279,7 +292,81 @@ class BrokerManager {
 
   public async getActiveOpenPositions(): Promise<BrokerPosition[]> {
     const adapter = this.getActiveAdapter();
-    return adapter.getOpenPositions();
+    let positions = await adapter.getOpenPositions();
+    if (positions.length === 0 && typeof adapter.getLastKnownLivePositions === 'function') {
+      positions = adapter.getLastKnownLivePositions();
+    }
+    if (positions.length === 0) {
+      positions = this.reconstructActivePositionsFromAudit();
+    }
+    return positions;
+  }
+
+  /**
+   * Resilient fallback: reconstructs active positions from recent FILLED audit logs
+   * if broker API temporarily returns empty positions.
+   */
+  public reconstructActivePositionsFromAudit(): BrokerPosition[] {
+    const activeConf = brokerVault.getActiveBroker();
+    const reconstructed: BrokerPosition[] = [];
+    const seenSymbols = new Set<string>();
+    const closedTickets = new Set<string>();
+
+    for (const log of this.auditLogs) {
+      if (log.status === 'CLOSED') {
+        const ticketMatch = log.message.match(/#([a-zA-Z0-9_\-]+)/);
+        if (ticketMatch && ticketMatch[1]) {
+          closedTickets.add(ticketMatch[1]);
+        }
+        if (log.symbol && log.symbol !== 'ALL') {
+          closedTickets.add(getTerminalSymbolFromBroker(log.symbol, log.brokerId));
+        }
+      }
+    }
+
+    for (const log of this.auditLogs) {
+      if (log.status !== 'FILLED' || log.brokerId !== activeConf.id) continue;
+      // Skip if older than 24 hours
+      if (Date.now() - log.timestamp > 24 * 60 * 60 * 1000) continue;
+
+      const ticketMatch = log.message.match(/#([a-zA-Z0-9_\-]+)/);
+      const ticketId = ticketMatch ? ticketMatch[1] : `rec-${log.id}`;
+      if (closedTickets.has(ticketId)) continue;
+
+      const sym = getTerminalSymbolFromBroker(log.symbol, log.brokerId);
+      if (closedTickets.has(sym)) continue;
+      if (seenSymbols.has(sym)) continue;
+
+      seenSymbols.add(sym);
+      const isBreakevenLocked =
+        log.stopLoss !== undefined &&
+        log.stopLoss > 0 &&
+        ((log.direction === 'BUY' && log.stopLoss >= log.entryPrice) ||
+          (log.direction === 'SELL' && log.stopLoss <= log.entryPrice));
+
+      reconstructed.push({
+        id: `audit-pos-${ticketId}`,
+        brokerId: log.brokerId,
+        brokerTicketId: ticketId,
+        symbol: sym,
+        direction: log.direction,
+        units: log.units,
+        openPrice: log.entryPrice,
+        currentPrice: log.entryPrice,
+        stopLoss: log.stopLoss || 0,
+        takeProfit: log.takeProfit || 0,
+        unrealizedPnL: 0,
+        unrealizedPnLR: 0,
+        riskPct: log.riskPct ?? activeConf.defaultRiskPct ?? 1.0,
+        riskCapitalUsd: log.riskCapitalUsd,
+        isBreakevenLocked,
+        source: log.source === 'CLEANUP_DUPLICATES' ? 'BROKER_SYNC' : (log.source || 'AUTO_ARBITER'),
+        openedAt: log.timestamp,
+        environment: activeConf.environment,
+      });
+    }
+
+    return reconstructed;
   }
 
   public async getActiveClosedPositions(): Promise<BrokerClosedPosition[]> {
@@ -732,6 +819,21 @@ class BrokerManager {
   public async closePosition(brokerId: BrokerId, ticketId: string): Promise<{ success: boolean; message: string }> {
     const adapter = this.adapters[brokerId] || this.getActiveAdapter();
     const res = await adapter.closePosition(ticketId);
+    if (res.success) {
+      this.auditLogs.unshift({
+        id: `audit-close-${Date.now()}-${ticketId}`,
+        timestamp: Date.now(),
+        brokerId,
+        symbol: '',
+        direction: 'BUY',
+        units: 0,
+        entryPrice: 0,
+        status: 'CLOSED',
+        source: 'MANUAL_TICKET',
+        message: `Position #${ticketId} closed (${res.message})`,
+      });
+      if (this.auditLogs.length > 50) this.auditLogs = this.auditLogs.slice(0, 50);
+    }
     // Sync closed positions to Bayesian scorecards immediately
     const closed = await adapter.getClosedPositions();
     this.syncClosedTradesToBayesianScorecards(closed);
@@ -741,6 +843,21 @@ class BrokerManager {
   public async flattenAllActive(): Promise<{ closedCount: number; errors: string[] }> {
     const adapter = this.getActiveAdapter();
     const res = await adapter.flattenAll();
+    if (res.closedCount > 0) {
+      this.auditLogs.unshift({
+        id: `audit-flatten-${Date.now()}`,
+        timestamp: Date.now(),
+        brokerId: brokerVault.getActiveBroker().id,
+        symbol: 'ALL',
+        direction: 'BUY',
+        units: 0,
+        entryPrice: 0,
+        status: 'CLOSED',
+        source: 'MANUAL_TICKET',
+        message: `Flattened all open positions (${res.closedCount} closed).`,
+      });
+      if (this.auditLogs.length > 50) this.auditLogs = this.auditLogs.slice(0, 50);
+    }
     const closed = await adapter.getClosedPositions();
     this.syncClosedTradesToBayesianScorecards(closed);
     return res;
