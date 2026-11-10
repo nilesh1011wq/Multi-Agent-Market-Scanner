@@ -18,10 +18,10 @@ import {
   areInstrumentsCorrelated,
   getTerminalSymbolFromBroker,
 } from './symbolMapper';
-import { ArbiterOutput } from '../types/debate';
+import { ArbiterOutput, AgentName } from '../types/debate';
 import { FeatureSnapshot } from '../types/market';
 import { scorecardService } from '../backtest/scorecards';
-import { AgentName } from '../types/agent';
+import { RecommendationRecord } from '../types/scorecard';
 
 export interface ExecutionAuditLog {
   id: string;
@@ -42,16 +42,16 @@ export interface ExecutionAuditLog {
 }
 
 const ALL_SPECIALIST_AGENTS: AgentName[] = [
-  'TREND_MOMENTUM',
-  'MEAN_REVERSION',
-  'VOLATILITY_REGIME',
-  'LIQUIDITY_ORDERFLOW',
-  'PATTERN_STRUCTURE',
-  'FUNDAMENTAL_MACRO',
-  'SENTIMENT_NEWS',
-  'CORRELATION_INTERMARKET',
-  'SEASONALITY_ANALOG',
-  'RISK_EXECUTION',
+  'Trend & Momentum',
+  'Mean Reversion',
+  'Price Action & S/R',
+  'Volatility & Regime',
+  'Market Structure & Volume',
+  'Macro & Fundamental',
+  'News & Sentiment',
+  'Intermarket',
+  'Positioning & Seasonality',
+  'Risk Manager',
 ];
 
 class BrokerManager {
@@ -151,15 +151,29 @@ class BrokerManager {
       this.syncedClosedTicketIds.add(c.brokerTicketId);
 
       try {
+        const outcome: 'WIN' | 'LOSS' = (c.realizedPnLR ?? 0) >= 0 ? 'WIN' : 'LOSS';
+        const rec: RecommendationRecord = {
+          id: c.brokerTicketId,
+          symbol: c.symbol,
+          timeframe: 'H1',
+          recommendation: c.direction,
+          confidence: 80,
+          entryZone: [c.openPrice, c.openPrice],
+          stopLoss: c.stopLoss ?? 0,
+          takeProfit1: c.takeProfit ?? 0,
+          takeProfit2: c.takeProfit ?? 0,
+          riskReward: 1.5,
+          evidenceBadge: 'A',
+          status: outcome === 'WIN' ? 'TP1_HIT' : 'SL_HIT',
+          openedAt: c.openedAt,
+          consensusLevel: 'strong',
+          rationale: `Closed trade from broker ticket ${c.brokerTicketId}`,
+        };
         scorecardService.recordTradeResolution(
-          c.symbol,
-          'H1',
-          c.direction,
-          c.realizedPnLR,
-          ALL_SPECIALIST_AGENTS.map((agent) => ({
-            agent,
-            direction: c.direction,
-          }))
+          rec,
+          outcome,
+          c.realizedPnLR ?? 0,
+          ALL_SPECIALIST_AGENTS
         );
       } catch {
         // Non-blocking scorecard update
@@ -348,13 +362,24 @@ class BrokerManager {
     }
 
     // 6b. Duplicate symbol check (Strict institutional rule: maximum 1 trade per instrument)
-    if (
-      openPositions.some(
-        (p) => getTerminalSymbolFromBroker(p.symbol, p.brokerId) === targetSymbol
-      )
-    ) {
+    const hasOpenPos = openPositions.some(
+      (p) => getTerminalSymbolFromBroker(p.symbol, p.brokerId) === targetSymbol
+    );
+    const hasAdapterKnownPos =
+      typeof (adapter as any).getLastKnownLivePositions === 'function' &&
+      (adapter as any).getLastKnownLivePositions().some(
+        (p: BrokerPosition) => getTerminalSymbolFromBroker(p.symbol, p.brokerId) === targetSymbol
+      );
+    const hasRecentUnclosedOrder = this.auditLogs.some(
+      (l) =>
+        l.status === 'FILLED' &&
+        getTerminalSymbolFromBroker(l.symbol, activeConf.id) === targetSymbol &&
+        Date.now() - l.timestamp < 30 * 60 * 1000
+    );
+
+    if (hasOpenPos || hasAdapterKnownPos || hasRecentUnclosedOrder) {
       console.log(
-        `[BrokerManager] Symbol ${targetSymbol} already has active open position on ${activeConf.name}. Strict 1 trade per instrument rule enforced.`
+        `[BrokerManager] Symbol ${targetSymbol} already has active open position or recent fill on ${activeConf.name}. Strict 1 trade per instrument rule enforced.`
       );
       return null;
     }
@@ -386,7 +411,7 @@ class BrokerManager {
     // 7. Spread-Aware Entry & Stop-Loss Padding (1.5x spread buffer)
     const def = getInstrumentDefinition(arbiter.symbol);
     const digits = def?.digits ?? 5;
-    const liveSpread = snapshot.spread > 0 ? snapshot.spread : def?.minSpread || 0.0001;
+    const liveSpread = def?.minSpread || 0.0001;
     const entryPrice = (arbiter.entry_zone[0] + arbiter.entry_zone[1]) / 2;
     const rawStopDist = Math.abs(entryPrice - arbiter.stop_loss);
 

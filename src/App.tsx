@@ -1044,59 +1044,64 @@ export default function App() {
           </div>
 
           {/* Section 3: Broker / Paper Account Mini Widget */}
-          <div className="p-3.5 border-b border-slate-800 space-y-2.5">
-            <div className="flex items-center justify-between text-xs font-mono text-slate-300 font-semibold">
-              <div className="flex items-center gap-1.5">
-                <Wallet className="w-3.5 h-3.5 text-emerald-400" />
-                <span>{brokerConfigs[activeBrokerId]?.isConnected ? 'BROKER PORTFOLIO' : 'PAPER PORTFOLIO'}</span>
-              </div>
-              <span className="text-[10px] text-emerald-400 font-bold tabular-nums">
-                ${brokerConfigs[activeBrokerId]?.isConnected && brokerAccountSummary
-                  ? brokerAccountSummary.equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                  : (paperSummary ? paperSummary.equity.toLocaleString() : '10,366')}
-              </span>
-            </div>
-            <div className="bg-slate-900/60 p-2.5 rounded border border-slate-800/80 font-mono text-xs space-y-1.5">
-              <div className="flex justify-between text-slate-400">
-                <span>Realized PnL:</span>
-                <span className={`font-bold ${(brokerConfigs[activeBrokerId]?.isConnected ? (brokerAccountSummary?.realizedPnL ?? 0) >= 0 : (paperSummary?.totalRealizedR ?? 0) >= 0) ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {brokerConfigs[activeBrokerId]?.isConnected && brokerAccountSummary
-                    ? `${brokerAccountSummary.realizedPnL >= 0 ? '+' : ''}$${brokerAccountSummary.realizedPnL.toFixed(2)} (${brokerAccountSummary.realizedPnLR >= 0 ? '+' : ''}${brokerAccountSummary.realizedPnLR.toFixed(1)}R)`
-                    : (paperSummary ? `+${paperSummary.totalRealizedR}R` : '+2.5R')}
-                </span>
-              </div>
-              <div className="flex justify-between text-slate-400">
-                <span>Win Rate:</span>
-                <span className="text-cyan-300 font-bold">
-                  {brokerConfigs[activeBrokerId]?.isConnected && brokerAccountSummary
-                    ? `${brokerAccountSummary.winRate.toFixed(1)}%`
-                    : (paperSummary ? `${paperSummary.winRate}%` : '66.7%')}
-                </span>
-              </div>
-              <div className="flex justify-between text-slate-400">
-                <span>Active Positions:</span>
-                <span className="text-slate-200 font-bold">
-                  {brokerConfigs[activeBrokerId]?.isConnected
-                    ? `${brokerPositions.length} Open`
-                    : `${paperOpenPositions.length} Open`}
-                </span>
-              </div>
-              {brokerConfigs[activeBrokerId]?.isConnected && (
-                <div className="flex justify-between text-slate-400 text-[11px]">
-                  <span>Margin Level:</span>
-                  <span className="text-emerald-400 font-bold">
-                    {brokerAccountSummary ? `${brokerAccountSummary.marginLevel.toFixed(0)}%` : '100%'}
+          {(() => {
+            const isBrokerConnected = brokerConfigs[activeBrokerId]?.status === 'CONNECTED' || Boolean(brokerAccountSummary?.isConnected);
+            return (
+              <div className="p-3.5 border-b border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between text-xs font-mono text-slate-300 font-semibold">
+                  <div className="flex items-center gap-1.5">
+                    <Wallet className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>{isBrokerConnected ? 'BROKER PORTFOLIO' : 'PAPER PORTFOLIO'}</span>
+                  </div>
+                  <span className="text-[10px] text-emerald-400 font-bold tabular-nums">
+                    ${isBrokerConnected && brokerAccountSummary
+                      ? brokerAccountSummary.equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                      : (paperSummary ? paperSummary.equity.toLocaleString() : '10,366')}
                   </span>
                 </div>
-              )}
-              <button
-                onClick={() => setActiveTab(brokerConfigs[activeBrokerId]?.isConnected ? 'BROKER' : 'PAPER_TRADING')}
-                className="w-full mt-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded text-[11px] font-bold transition-colors cursor-pointer"
-              >
-                {brokerConfigs[activeBrokerId]?.isConnected ? 'Open Broker Gateway' : 'Open Paper Simulator'}
-              </button>
-            </div>
-          </div>
+                <div className="bg-slate-900/60 p-2.5 rounded border border-slate-800/80 font-mono text-xs space-y-1.5">
+                  <div className="flex justify-between text-slate-400">
+                    <span>Realized PnL:</span>
+                    <span className={`font-bold ${(isBrokerConnected ? (brokerAccountSummary?.realizedPnL ?? 0) >= 0 : (paperSummary?.totalRealizedR ?? 0) >= 0) ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {isBrokerConnected && brokerAccountSummary
+                        ? `${(brokerAccountSummary.realizedPnL ?? 0) >= 0 ? '+' : ''}${(brokerAccountSummary.realizedPnL ?? 0).toFixed(2)} (${(brokerAccountSummary.realizedPnLR ?? 0) >= 0 ? '+' : ''}${(brokerAccountSummary.realizedPnLR ?? 0).toFixed(1)}R)`
+                        : (paperSummary ? `+${paperSummary.totalRealizedR}R` : '+2.5R')}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Win Rate:</span>
+                    <span className="text-cyan-300 font-bold">
+                      {isBrokerConnected && brokerAccountSummary
+                        ? `${(brokerAccountSummary.winRate ?? 0).toFixed(1)}%`
+                        : (paperSummary ? `${paperSummary.winRate}%` : '66.7%')}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-slate-400">
+                    <span>Active Positions:</span>
+                    <span className="text-slate-200 font-bold">
+                      {isBrokerConnected
+                        ? `${brokerPositions.length} Open`
+                        : `${paperOpenPositions.length} Open`}
+                    </span>
+                  </div>
+                  {isBrokerConnected && (
+                    <div className="flex justify-between text-slate-400 text-[11px]">
+                      <span>Margin Level:</span>
+                      <span className="text-emerald-400 font-bold">
+                        {brokerAccountSummary ? `${brokerAccountSummary.marginLevelPct.toFixed(0)}%` : '100%'}
+                      </span>
+                    </div>
+                  )}
+                  <button
+                    onClick={() => setActiveTab(isBrokerConnected ? 'BROKER' : 'PAPER_TRADING')}
+                    className="w-full mt-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded text-[11px] font-bold transition-colors cursor-pointer"
+                  >
+                    {isBrokerConnected ? 'Open Broker Gateway' : 'Open Paper Simulator'}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Section 4: Operational Integrity Notice */}
           <div className="p-3.5 text-xs font-mono text-slate-400 space-y-2 mt-auto">

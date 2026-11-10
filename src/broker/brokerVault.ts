@@ -124,7 +124,9 @@ export class BrokerVault {
             delete (loaded as any).OANDA;
           }
           // Ensure broker without credentials is not falsely marked CONNECTED
+          // and auto-execution defaults to false until explicitly toggled by user
           for (const c of Object.values(loaded) as BrokerConfig[]) {
+            c.isAutoExecutionEnabled = false;
             if (!c.apiKey || c.apiKey.length < 5 || !c.identifier) {
               c.status = 'DISCONNECTED';
             }

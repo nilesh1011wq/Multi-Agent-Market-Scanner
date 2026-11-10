@@ -285,7 +285,7 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
               </button>
             )}
 
-            {positions.length > 0 && (
+            {(positions.length > 0 || (accountSummary?.marginUsed !== undefined && accountSummary.marginUsed > 0)) && (
               <button
                 onClick={handleFlatten}
                 disabled={isFlattening}
@@ -700,23 +700,59 @@ export const LiveBrokerPositionsPanel: React.FC<LiveBrokerPositionsPanelProps> =
                 </div>
               </div>
             ) : (
-              <div className="max-w-md mx-auto space-y-2">
-                <p className="font-semibold text-slate-300 text-sm">
-                  No open positions on {activeBroker.name} ({accountSummary.environment} account)
-                </p>
-                <p className="text-[11px] text-slate-400 leading-relaxed font-sans">
-                  Account is actively linked with {activeBroker.name} API. New orders dispatched via Chief Arbiter, the manual ticket, or your Capital.com platform will appear here in real-time.
-                </p>
-                <div className="pt-1">
-                  <button
-                    onClick={onRefresh}
-                    disabled={isLoading}
-                    className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded text-xs font-bold transition-colors cursor-pointer inline-flex items-center gap-1.5"
-                  >
-                    <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
-                    <span>FORCE SYNC POSITIONS</span>
-                  </button>
-                </div>
+              <div className="max-w-md mx-auto space-y-3">
+                {accountSummary.marginUsed > 0 ? (
+                  <div className="p-3 bg-amber-950/40 border border-amber-500/30 rounded-lg text-left space-y-2">
+                    <div className="flex items-center gap-2 text-amber-300 font-bold text-xs">
+                      <Flame className="w-4 h-4 text-amber-400" />
+                      <span>CAPITAL.COM ACTIVE EXPOSURE DETECTED (${accountSummary.marginUsed.toFixed(2)} MARGIN LOCKED)</span>
+                    </div>
+                    <p className="text-[11px] text-amber-200/80 font-sans leading-relaxed">
+                      Your Capital.com account has active trades utilizing margin. Click <strong>FORCE SYNC</strong> to refresh position tickets, or <strong>EMERGENCY FLATTEN</strong> to close all live trades immediately.
+                    </p>
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        onClick={onRefresh}
+                        disabled={isLoading}
+                        className="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded text-xs font-bold transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                        <span>FORCE SYNC POSITIONS</span>
+                      </button>
+                      <button
+                        onClick={handleFlatten}
+                        disabled={isFlattening}
+                        className={`px-3 py-1.5 rounded text-xs font-bold transition-colors cursor-pointer inline-flex items-center gap-1.5 ${
+                          confirmFlatten
+                            ? 'bg-rose-600 text-white animate-pulse'
+                            : 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40'
+                        }`}
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        <span>{confirmFlatten ? 'CONFIRM EMERGENCY FLATTEN' : 'EMERGENCY FLATTEN ALL'}</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <p className="font-semibold text-slate-300 text-sm">
+                      No open positions on {activeBroker.name} ({accountSummary.environment} account)
+                    </p>
+                    <p className="text-[11px] text-slate-400 leading-relaxed font-sans">
+                      Account is actively linked with {activeBroker.name} API. New orders dispatched via Chief Arbiter, the manual ticket, or your Capital.com platform will appear here in real-time.
+                    </p>
+                    <div className="pt-1">
+                      <button
+                        onClick={onRefresh}
+                        disabled={isLoading}
+                        className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded text-xs font-bold transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
+                        <span>FORCE SYNC POSITIONS</span>
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>

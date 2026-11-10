@@ -573,6 +573,25 @@ export async function runProfessionalUAT() {
   );
 
   // Check 5: Duplicate Position Rejection Guard (Strict 1 Trade Per Instrument)
+  // Step A: Seed initial position on EURUSD
+  const seedOrder: StandardizedOrderRequest = {
+    brokerId: 'CAPITAL_COM',
+    symbol: 'EURUSD',
+    direction: 'BUY',
+    orderType: 'MARKET',
+    units: 10000,
+    riskPct: 1.0,
+    riskCapitalUsd: 150,
+    entryPrice: 1.11500,
+    stopLoss: 1.11200,
+    takeProfit1: 1.12100,
+    riskReward: 2.0,
+    clientOrderId: `test-seed-buy-${Date.now()}`,
+    source: 'MANUAL_TICKET',
+  };
+  await brokerManager.executeManualOrder(seedOrder);
+
+  // Step B: Attempt second position on EURUSD (must be rejected)
   const dupBuyOrder: StandardizedOrderRequest = {
     brokerId: 'CAPITAL_COM',
     symbol: 'EURUSD',
@@ -596,11 +615,11 @@ export async function runProfessionalUAT() {
     `Order properly rejected: "${dupBuyResult.message}"`
   );
 
-  // Close previous position so manual order can execute cleanly
+  // Close previous positions so subsequent manual orders can execute cleanly
   const prevPositions = await brokerManager.getActiveOpenPositions();
-  const eurPos = prevPositions.find((p) => p.symbol === 'EURUSD');
-  if (eurPos) {
-    await brokerManager.closePosition('CAPITAL_COM', eurPos.brokerTicketId);
+  const eurPosList = prevPositions.filter((p) => p.symbol === 'EURUSD');
+  for (const pos of eurPosList) {
+    await brokerManager.closePosition('CAPITAL_COM', pos.brokerTicketId);
   }
 
   // Check 6: Valid manual order execution

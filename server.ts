@@ -595,7 +595,7 @@ async function startServer() {
       const { brokerId } = req.body || {};
       const { brokerManager } = await import('./src/broker/brokerManager');
       const result = await brokerManager.closeDuplicatePositions(brokerId);
-      res.json({ success: true, ...result });
+      res.json({ ...result });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }

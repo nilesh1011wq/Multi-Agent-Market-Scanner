@@ -43,6 +43,13 @@ export class CapitalComAdapter implements IBrokerAdapter {
   > = new Map();
   private simulatedBalance = 15000;
   private lastErrorMessage?: string;
+  private inFlightPositionsPromise: Promise<BrokerPosition[]> | null = null;
+  private lastPositionsFetchTimestamp = 0;
+  private dealRefToDealId: Map<string, string> = new Map();
+
+  public getLastKnownLivePositions(): BrokerPosition[] {
+    return Array.from(this.lastKnownLivePositions.values());
+  }
 
   public getLastErrorMessage(): string | undefined {
     return this.lastErrorMessage;
@@ -317,14 +324,14 @@ export class CapitalComAdapter implements IBrokerAdapter {
               marginFree: Math.round(available * 100) / 100,
               marginLevelPct: marginUsed > 0 ? Math.round(((equity / marginUsed) * 100) * 10) / 10 : 999,
               unrealizedPnL: Math.round(upl * 100) / 100,
-              openPositionsCount: openPositions.length,
+              openPositionsCount: openPositions.length > 0 ? openPositions.length : this.lastKnownLivePositions.size,
               isConnected: true,
               lastSyncedAt: Date.now(),
               isRealBrokerAccount: true,
               accountSource: 'LIVE_BROKER_API',
               brokerAccountId: acc.accountId || this.liveAccountId || undefined,
               connectionStatus: 'CONNECTED',
-              lastErrorMessage: undefined,
+              lastErrorMessage: this.lastErrorMessage,
             };
           }
         }
@@ -352,14 +359,14 @@ export class CapitalComAdapter implements IBrokerAdapter {
           marginFree: Math.round(available * 100) / 100,
           marginLevelPct: marginUsed > 0 ? Math.round(((equity / marginUsed) * 100) * 10) / 10 : 999,
           unrealizedPnL: Math.round(upl * 100) / 100,
-          openPositionsCount: this.simulatedPositions.length,
+          openPositionsCount: this.lastKnownLivePositions.size,
           isConnected: true,
           lastSyncedAt: Date.now(),
           isRealBrokerAccount: true,
           accountSource: 'LIVE_BROKER_API',
           brokerAccountId: this.liveAccountId || undefined,
           connectionStatus: 'CONNECTED',
-          lastErrorMessage: undefined,
+          lastErrorMessage: this.lastErrorMessage,
         };
       }
     }
@@ -523,7 +530,25 @@ export class CapitalComAdapter implements IBrokerAdapter {
     }
   }
 
-  public async getOpenPositions(): Promise<BrokerPosition[]> {
+  public async getOpenPositions(forceFresh = false): Promise<BrokerPosition[]> {
+    const now = Date.now();
+    // Cache for 3 seconds unless forceFresh is requested
+    if (!forceFresh && now - this.lastPositionsFetchTimestamp < 3000 && this.lastKnownLivePositions.size > 0) {
+      return Array.from(this.lastKnownLivePositions.values());
+    }
+
+    if (this.inFlightPositionsPromise) {
+      return this.inFlightPositionsPromise;
+    }
+
+    this.inFlightPositionsPromise = this.fetchOpenPositionsInternal().finally(() => {
+      this.inFlightPositionsPromise = null;
+    });
+
+    return this.inFlightPositionsPromise;
+  }
+
+  private async fetchOpenPositionsInternal(): Promise<BrokerPosition[]> {
     const { apiKey, environment, hasValidCreds } = this.resolveCredentials();
     const sess = await this.ensureSession();
 
@@ -539,76 +564,90 @@ export class CapitalComAdapter implements IBrokerAdapter {
 
         if (res.ok) {
           const data = await res.json();
-          const rawPositions = Array.isArray(data.positions)
-            ? data.positions
-            : Array.isArray(data)
-            ? data
-            : [];
-          if (rawPositions.length >= 0 && (Array.isArray(data.positions) || Array.isArray(data))) {
-            const currentTickets = new Set<string>();
-            const livePositions: BrokerPosition[] = rawPositions.map((item: any) => {
-              const pos = item.position || item;
-              const mkt = item.market || item;
-              const ticketId = String(
-                pos.dealId || pos.dealReference || item.dealId || item.dealReference || `CAP-${Date.now()}`
-              );
-              currentTickets.add(ticketId);
+          // Capital.com can return: { positions: [...] } or array directly or { data: [...] }
+          let rawPositions: any[] = [];
+          if (Array.isArray(data.positions)) {
+            rawPositions = data.positions;
+          } else if (Array.isArray(data)) {
+            rawPositions = data;
+          } else if (Array.isArray(data.data)) {
+            rawPositions = data.data;
+          }
 
-              const rawEpic = pos.epic || item.epic || mkt.epic || 'EURUSD';
-              const termSymbol = getTerminalSymbolFromBroker(rawEpic, 'CAPITAL_COM');
-              const direction: 'BUY' | 'SELL' = (pos.direction === 'SELL' || item.direction === 'SELL') ? 'SELL' : 'BUY';
-              const units = Number(pos.size ?? item.size) || 0;
-              const openPrice = Number(pos.level ?? item.level ?? pos.openLevel ?? item.openLevel) || 0;
-              const currentPrice =
-                direction === 'BUY'
-                  ? Number(mkt.bid ?? pos.bid) || openPrice
-                  : Number(mkt.offer ?? mkt.ask ?? pos.offer ?? pos.ask) || openPrice;
-              const stopLoss = pos.stopLevel ? Number(pos.stopLevel) : item.stopLevel ? Number(item.stopLevel) : 0;
-              const takeProfit = pos.profitLevel ? Number(pos.profitLevel) : item.profitLevel ? Number(item.profitLevel) : 0;
+          const currentTickets = new Set<string>();
+          const livePositions: BrokerPosition[] = [];
 
-              const meta = this.positionMeta.get(ticketId);
-              const refStop = meta?.initialStopLoss || stopLoss;
-              const calc = calculatePositionPnL(
-                termSymbol,
-                'CAPITAL_COM',
-                direction,
-                units,
-                openPrice,
-                currentPrice,
-                refStop
-              );
-              const unrealizedPnL =
-                pos.upl !== undefined && pos.upl !== null ? Number(pos.upl) : calc.pnlUsd;
+          for (const item of rawPositions) {
+            const pos = item.position || item;
+            const mkt = item.market || item;
+            const rawDealId = pos.dealId || item.dealId;
+            const rawDealRef = pos.dealReference || item.dealReference;
+            const ticketId = String(rawDealId || rawDealRef || `CAP-${Date.now()}`);
 
-              const isBreakevenLocked =
-                meta?.isBreakevenLocked ||
-                (stopLoss > 0 &&
-                  ((direction === 'BUY' && stopLoss >= openPrice) ||
-                    (direction === 'SELL' && stopLoss <= openPrice)));
+            if (rawDealRef && rawDealId) {
+              this.dealRefToDealId.set(String(rawDealRef), String(rawDealId));
+            }
 
-              return {
-                id: `cap-${ticketId}`,
-                brokerId: 'CAPITAL_COM',
-                brokerTicketId: ticketId,
-                symbol: termSymbol,
-                direction,
-                units,
-                openPrice,
-                currentPrice,
-                stopLoss,
-                takeProfit,
-                unrealizedPnL: Math.round(unrealizedPnL * 100) / 100,
-                unrealizedPnLR: calc.pnlR,
-                riskPct: meta?.riskPct ?? 1.0,
-                riskCapitalUsd: meta?.riskCapitalUsd,
-                isBreakevenLocked,
-                source: meta?.source || 'BROKER_SYNC',
-                openedAt: pos.createdDate ? new Date(pos.createdDate).getTime() : Date.now(),
-                environment,
-              };
+            currentTickets.add(ticketId);
+            if (rawDealId) currentTickets.add(String(rawDealId));
+            if (rawDealRef) currentTickets.add(String(rawDealRef));
+
+            const rawEpic = pos.epic || item.epic || mkt.epic || 'EURUSD';
+            const termSymbol = getTerminalSymbolFromBroker(rawEpic, 'CAPITAL_COM');
+            const direction: 'BUY' | 'SELL' = (pos.direction === 'SELL' || item.direction === 'SELL') ? 'SELL' : 'BUY';
+            const units = Number(pos.size ?? item.size) || 0;
+            const openPrice = Number(pos.level ?? item.level ?? pos.openLevel ?? item.openLevel) || 0;
+            const currentPrice =
+              direction === 'BUY'
+                ? Number(mkt.bid ?? pos.bid) || openPrice
+                : Number(mkt.offer ?? mkt.ask ?? pos.offer ?? pos.ask) || openPrice;
+            const stopLoss = pos.stopLevel ? Number(pos.stopLevel) : item.stopLevel ? Number(item.stopLevel) : 0;
+            const takeProfit = pos.profitLevel ? Number(pos.profitLevel) : item.profitLevel ? Number(item.profitLevel) : 0;
+
+            const meta = this.positionMeta.get(ticketId) || (rawDealRef ? this.positionMeta.get(String(rawDealRef)) : undefined);
+            const refStop = meta?.initialStopLoss || stopLoss;
+            const calc = calculatePositionPnL(
+              termSymbol,
+              'CAPITAL_COM',
+              direction,
+              units,
+              openPrice,
+              currentPrice,
+              refStop
+            );
+            const unrealizedPnL =
+              pos.upl !== undefined && pos.upl !== null ? Number(pos.upl) : calc.pnlUsd;
+
+            const isBreakevenLocked =
+              meta?.isBreakevenLocked ||
+              (stopLoss > 0 &&
+                ((direction === 'BUY' && stopLoss >= openPrice) ||
+                  (direction === 'SELL' && stopLoss <= openPrice)));
+
+            livePositions.push({
+              id: `cap-${ticketId}`,
+              brokerId: 'CAPITAL_COM',
+              brokerTicketId: ticketId,
+              symbol: termSymbol,
+              direction,
+              units,
+              openPrice,
+              currentPrice,
+              stopLoss,
+              takeProfit,
+              unrealizedPnL: Math.round(unrealizedPnL * 100) / 100,
+              unrealizedPnLR: calc.pnlR,
+              riskPct: meta?.riskPct ?? 1.0,
+              riskCapitalUsd: meta?.riskCapitalUsd,
+              isBreakevenLocked,
+              source: meta?.source || 'BROKER_SYNC',
+              openedAt: pos.createdDate ? new Date(pos.createdDate).getTime() : Date.now(),
+              environment,
             });
+          }
 
-            // Detect any position that was previously open on Capital.com and has now closed
+          if (livePositions.length > 0) {
+            // Detect positions that closed on Capital.com
             for (const [oldTicket, oldPos] of this.lastKnownLivePositions.entries()) {
               if (!currentTickets.has(oldTicket)) {
                 this.recordClosedPosition(oldPos, oldPos.currentPrice, 'BROKER_CLOSED');
@@ -619,8 +658,22 @@ export class CapitalComAdapter implements IBrokerAdapter {
             for (const lp of livePositions) {
               this.lastKnownLivePositions.set(lp.brokerTicketId, lp);
             }
-
+            this.lastPositionsFetchTimestamp = Date.now();
             return livePositions;
+          } else {
+            // Capital.com returned 0 positions. Check if margin indicates open exposure before clearing cache!
+            const deposit = Number(this.liveAccountInfo?.deposit ?? 0);
+            if (deposit > 0 && this.lastKnownLivePositions.size > 0) {
+              console.warn(`[CapitalComAdapter] /positions returned 0 items but margin deposit is $${deposit}. Retaining ${this.lastKnownLivePositions.size} known positions.`);
+              return Array.from(this.lastKnownLivePositions.values());
+            }
+
+            for (const [oldTicket, oldPos] of this.lastKnownLivePositions.entries()) {
+              this.recordClosedPosition(oldPos, oldPos.currentPrice, 'BROKER_CLOSED');
+            }
+            this.lastKnownLivePositions.clear();
+            this.lastPositionsFetchTimestamp = Date.now();
+            return [];
           }
         } else {
           const errData = await res.json().catch(() => ({}));
@@ -629,9 +682,15 @@ export class CapitalComAdapter implements IBrokerAdapter {
             this.cstToken = null;
             this.xSecurityToken = null;
           }
+          if (this.lastKnownLivePositions.size > 0) {
+            return Array.from(this.lastKnownLivePositions.values());
+          }
         }
       } catch (err: any) {
         this.lastErrorMessage = `Capital.com positions network error: ${err.message}`;
+        if (this.lastKnownLivePositions.size > 0) {
+          return Array.from(this.lastKnownLivePositions.values());
+        }
       }
     }
 
@@ -809,6 +868,33 @@ export class CapitalComAdapter implements IBrokerAdapter {
             initialStopLoss: order.stopLoss,
             source: order.source || 'MANUAL_TICKET',
           });
+
+          const newLivePosition: BrokerPosition = {
+            id: `cap-${resolvedDealId}`,
+            brokerId: 'CAPITAL_COM',
+            brokerTicketId: resolvedDealId,
+            symbol: order.symbol,
+            direction: order.direction,
+            units: Number(order.units),
+            openPrice: resolvedFillPrice,
+            currentPrice: resolvedFillPrice,
+            stopLoss: order.stopLoss || 0,
+            takeProfit: order.takeProfit1 || 0,
+            unrealizedPnL: 0,
+            unrealizedPnLR: 0,
+            riskPct: order.riskPct ?? 1.0,
+            riskCapitalUsd: order.riskCapitalUsd,
+            isBreakevenLocked: false,
+            source: order.source || 'MANUAL_TICKET',
+            openedAt: Date.now(),
+            environment,
+          };
+          this.lastKnownLivePositions.set(resolvedDealId, newLivePosition);
+          if (dealRef && dealRef !== resolvedDealId) {
+            this.dealRefToDealId.set(String(dealRef), resolvedDealId);
+            this.lastKnownLivePositions.set(String(dealRef), newLivePosition);
+          }
+          this.lastPositionsFetchTimestamp = 0;
 
           return {
             success: true,
@@ -991,7 +1077,14 @@ export class CapitalComAdapter implements IBrokerAdapter {
   }
 
   public async closePosition(ticketId: string): Promise<{ success: boolean; message: string }> {
-    const cleanTicketId = ticketId.replace(/^cap-/i, '').replace(/^pos-/i, '').trim();
+    const rawClean = ticketId.replace(/^cap-/i, '').replace(/^pos-/i, '').trim();
+    let targetDealId = rawClean;
+
+    // Check if this is a mapped dealReference that resolves to a dealId
+    if (this.dealRefToDealId.has(rawClean)) {
+      targetDealId = this.dealRefToDealId.get(rawClean)!;
+    }
+
     const { apiKey, environment, hasValidCreds } = this.resolveCredentials();
     const sess = await this.ensureSession();
 
@@ -999,12 +1092,35 @@ export class CapitalComAdapter implements IBrokerAdapter {
       if (!sess.connected || !this.cstToken || !this.xSecurityToken || !apiKey) {
         return {
           success: false,
-          message: `Cannot close position #${cleanTicketId} on Capital.com: Broker session not authenticated (${sess.message}). Verify credentials in Broker Settings.`,
+          message: `Cannot close position #${rawClean} on Capital.com: Broker session not authenticated (${sess.message}). Verify credentials in Broker Settings.`,
         };
       }
 
+      // If ticketId is a UUID dealReference (contains hyphens) and wasn't mapped yet, resolve it via /confirms
+      if (targetDealId.includes('-') && apiKey) {
+        try {
+          const confRes = await fetch(`${this.getBaseUrl()}/confirms/${targetDealId}`, {
+            headers: {
+              'X-CAP-API-KEY': apiKey,
+              CST: this.cstToken,
+              'X-SECURITY-TOKEN': this.xSecurityToken,
+            },
+          });
+          if (confRes.ok) {
+            const confData = await confRes.json();
+            const resolved = confData.affectedDeals?.[0]?.dealId || confData.dealId;
+            if (resolved) {
+              this.dealRefToDealId.set(targetDealId, String(resolved));
+              targetDealId = String(resolved);
+            }
+          }
+        } catch {
+          // Proceed with current targetDealId
+        }
+      }
+
       try {
-        const res = await fetch(`${this.getBaseUrl()}/positions/${cleanTicketId}`, {
+        let res = await fetch(`${this.getBaseUrl()}/positions/${targetDealId}`, {
           method: 'DELETE',
           headers: {
             'X-CAP-API-KEY': apiKey,
@@ -1013,45 +1129,64 @@ export class CapitalComAdapter implements IBrokerAdapter {
           },
         });
 
+        // If targetDealId was resolved from dealReference but failed with 404, try rawClean
+        if (!res.ok && res.status === 404 && targetDealId !== rawClean) {
+          res = await fetch(`${this.getBaseUrl()}/positions/${rawClean}`, {
+            method: 'DELETE',
+            headers: {
+              'X-CAP-API-KEY': apiKey,
+              CST: this.cstToken,
+              'X-SECURITY-TOKEN': this.xSecurityToken,
+            },
+          });
+        }
+
         if (res.ok) {
           const livePos =
-            this.lastKnownLivePositions.get(cleanTicketId) ||
+            this.lastKnownLivePositions.get(targetDealId) ||
+            this.lastKnownLivePositions.get(rawClean) ||
             this.lastKnownLivePositions.get(ticketId) ||
-            this.simulatedPositions.find((p) => p.brokerTicketId === cleanTicketId || p.brokerTicketId === ticketId);
+            this.simulatedPositions.find(
+              (p) => p.brokerTicketId === targetDealId || p.brokerTicketId === rawClean || p.brokerTicketId === ticketId
+            );
 
           if (livePos) {
             this.recordClosedPosition(livePos, livePos.currentPrice, 'MANUALLY_CLOSED');
-            this.lastKnownLivePositions.delete(cleanTicketId);
+            this.lastKnownLivePositions.delete(targetDealId);
+            this.lastKnownLivePositions.delete(rawClean);
             this.lastKnownLivePositions.delete(ticketId);
           }
           this.simulatedPositions = this.simulatedPositions.filter(
-            (p) => p.brokerTicketId !== cleanTicketId && p.brokerTicketId !== ticketId
+            (p) => p.brokerTicketId !== targetDealId && p.brokerTicketId !== rawClean && p.brokerTicketId !== ticketId
           );
+          this.lastPositionsFetchTimestamp = 0;
 
           return {
             success: true,
-            message: `Position #${cleanTicketId} closed successfully on Capital.com ${environment} account.`,
+            message: `Position #${targetDealId} closed successfully on Capital.com ${environment} account.`,
           };
         } else {
           const errData = await res.json().catch(() => ({}));
           const errMsg = errData.errorCode || errData.message || `HTTP ${res.status}`;
 
           // If position is already closed or deal not found on Capital.com, clean up cache cleanly
-          if (res.status === 404 || String(errMsg).includes('not.found')) {
-            this.lastKnownLivePositions.delete(cleanTicketId);
+          if (res.status === 404 || String(errMsg).includes('not.found') || String(errMsg).includes('already.closed')) {
+            this.lastKnownLivePositions.delete(targetDealId);
+            this.lastKnownLivePositions.delete(rawClean);
             this.lastKnownLivePositions.delete(ticketId);
             this.simulatedPositions = this.simulatedPositions.filter(
-              (p) => p.brokerTicketId !== cleanTicketId && p.brokerTicketId !== ticketId
+              (p) => p.brokerTicketId !== targetDealId && p.brokerTicketId !== rawClean && p.brokerTicketId !== ticketId
             );
+            this.lastPositionsFetchTimestamp = 0;
             return {
               success: true,
-              message: `Position #${cleanTicketId} was already closed on Capital.com. Local cache synchronized.`,
+              message: `Position #${rawClean} was already closed on Capital.com. Local cache synchronized.`,
             };
           }
 
           return {
             success: false,
-            message: `Capital.com rejected close for position #${cleanTicketId}: ${errMsg}.`,
+            message: `Capital.com rejected close for position #${targetDealId}: ${errMsg}.`,
           };
         }
       } catch (err: any) {
@@ -1064,7 +1199,7 @@ export class CapitalComAdapter implements IBrokerAdapter {
 
     // Calibrated sandbox execution when no real broker credentials are configured
     const idx = this.simulatedPositions.findIndex(
-      (p) => p.brokerTicketId === ticketId || p.brokerTicketId === cleanTicketId || p.id === ticketId
+      (p) => p.brokerTicketId === ticketId || p.brokerTicketId === rawClean || p.id === ticketId
     );
     if (idx !== -1) {
       const pos = this.simulatedPositions.splice(idx, 1)[0];
@@ -1082,16 +1217,46 @@ export class CapitalComAdapter implements IBrokerAdapter {
     const errors: string[] = [];
     let closedCount = 0;
 
-    const { hasValidCreds } = this.resolveCredentials();
-    const positions = await this.getOpenPositions();
+    const { apiKey, environment, hasValidCreds } = this.resolveCredentials();
+    const sess = await this.ensureSession();
 
-    if (positions.length === 0) {
-      if (!hasValidCreds) {
-        this.simulatedPositions = [];
-      }
-      return { closedCount: 0, errors: [] };
+    // Force fresh fetch of open positions
+    let positions = await this.getOpenPositions(true);
+
+    // If positions is empty but lastKnownLivePositions has entries, try those
+    if (positions.length === 0 && this.lastKnownLivePositions.size > 0) {
+      positions = Array.from(this.lastKnownLivePositions.values());
     }
 
+    // If still empty and real broker credentials are active, query GET /positions directly as fallback
+    if (positions.length === 0 && hasValidCreds && sess.connected && apiKey && this.cstToken && this.xSecurityToken) {
+      try {
+        const res = await fetch(`${this.getBaseUrl()}/positions`, {
+          headers: {
+            'X-CAP-API-KEY': apiKey,
+            CST: this.cstToken,
+            'X-SECURITY-TOKEN': this.xSecurityToken,
+          },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const list = Array.isArray(data.positions) ? data.positions : Array.isArray(data) ? data : [];
+          for (const item of list) {
+            const p = item.position || item;
+            const dId = String(p.dealId || p.dealReference || '');
+            if (dId) {
+              const closeRes = await this.closePosition(dId);
+              if (closeRes.success) closedCount++;
+              else errors.push(closeRes.message);
+            }
+          }
+        }
+      } catch (err: any) {
+        errors.push(`Direct flatten fetch error: ${err.message}`);
+      }
+    }
+
+    // Close all gathered positions
     for (const pos of positions) {
       const res = await this.closePosition(pos.brokerTicketId);
       if (res.success) {
@@ -1104,6 +1269,9 @@ export class CapitalComAdapter implements IBrokerAdapter {
     if (!hasValidCreds) {
       this.simulatedPositions = [];
     }
+
+    this.lastKnownLivePositions.clear();
+    this.lastPositionsFetchTimestamp = 0;
 
     return { closedCount, errors };
   }
