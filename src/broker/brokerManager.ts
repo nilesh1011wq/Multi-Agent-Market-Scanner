@@ -339,18 +339,18 @@ class BrokerManager {
       return null;
     }
 
-    // Cooldown check: Prevent duplicate spam within 10 minutes on same symbol
+    // Cooldown check: Prevent duplicate spam within 60 minutes on same symbol
     const lastTime = this.lastExecutedSymbolTimestamps.get(targetSymbol) || 0;
-    if (Date.now() - lastTime < 10 * 60 * 1000) {
+    if (Date.now() - lastTime < 60 * 60 * 1000) {
       console.log(`[BrokerManager] Auto-execution cooldown active for ${targetSymbol}`);
       return null;
     }
 
-    // 6. Fetch live account summary and open positions
+    // 6. Fetch live account summary and open positions with forceFresh=true
     const adapter = this.getActiveAdapter();
     const [summary, openPositions] = await Promise.all([
       this.getActiveAccountSummary(),
-      adapter.getOpenPositions(),
+      adapter.getOpenPositions(true),
     ]);
 
     // 6a. Daily Drawdown Circuit Breaker Check
@@ -361,7 +361,7 @@ class BrokerManager {
       return null;
     }
 
-    // 6b. Duplicate symbol check (Strict institutional rule: maximum 1 trade per instrument)
+    // 6b. Duplicate symbol check (Strict institutional rule: maximum 1 trade per instrument across portfolio)
     const hasOpenPos = openPositions.some(
       (p) => getTerminalSymbolFromBroker(p.symbol, p.brokerId) === targetSymbol
     );
@@ -374,7 +374,7 @@ class BrokerManager {
       (l) =>
         l.status === 'FILLED' &&
         getTerminalSymbolFromBroker(l.symbol, activeConf.id) === targetSymbol &&
-        Date.now() - l.timestamp < 30 * 60 * 1000
+        Date.now() - l.timestamp < 120 * 60 * 1000
     );
 
     if (hasOpenPos || hasAdapterKnownPos || hasRecentUnclosedOrder) {
@@ -568,7 +568,10 @@ class BrokerManager {
       };
     }
 
-    const openPositions = await adapter.getOpenPositions();
+    let openPositions = await adapter.getOpenPositions(true);
+    if (openPositions.length === 0 && typeof (adapter as any).getLastKnownLivePositions === 'function') {
+      openPositions = (adapter as any).getLastKnownLivePositions();
+    }
     const existing = openPositions.find(
       (p) => getTerminalSymbolFromBroker(p.symbol, p.brokerId) === targetSymbol
     );
@@ -755,7 +758,11 @@ class BrokerManager {
     closedPositions: { ticketId: string; symbol: string }[];
   }> {
     const adapter = brokerId ? (this.adapters[brokerId] || this.getActiveAdapter()) : this.getActiveAdapter();
-    const positions = await adapter.getOpenPositions();
+    let positions = await adapter.getOpenPositions(true);
+
+    if (positions.length === 0 && typeof (adapter as any).getLastKnownLivePositions === 'function') {
+      positions = (adapter as any).getLastKnownLivePositions();
+    }
 
     // Group positions by canonical terminal symbol
     const grouped = new Map<string, typeof positions>();

@@ -1080,7 +1080,7 @@ export class CapitalComAdapter implements IBrokerAdapter {
     const rawClean = ticketId.replace(/^cap-/i, '').replace(/^pos-/i, '').trim();
     let targetDealId = rawClean;
 
-    // Check if this is a mapped dealReference that resolves to a dealId
+    // Check if this is a mapped dealReference that resolves to an official dealId
     if (this.dealRefToDealId.has(rawClean)) {
       targetDealId = this.dealRefToDealId.get(rawClean)!;
     }
@@ -1096,8 +1096,8 @@ export class CapitalComAdapter implements IBrokerAdapter {
         };
       }
 
-      // If ticketId is a UUID dealReference (contains hyphens) and wasn't mapped yet, resolve it via /confirms
-      if (targetDealId.includes('-') && apiKey) {
+      // If targetDealId is an unconfirmed order dealReference (starts with 'o_'), resolve it via /confirms
+      if (targetDealId.startsWith('o_') && apiKey) {
         try {
           const confRes = await fetch(`${this.getBaseUrl()}/confirms/${targetDealId}`, {
             headers: {
@@ -1112,6 +1112,33 @@ export class CapitalComAdapter implements IBrokerAdapter {
             if (resolved) {
               this.dealRefToDealId.set(targetDealId, String(resolved));
               targetDealId = String(resolved);
+            }
+          }
+        } catch {
+          // Proceed with current targetDealId
+        }
+      }
+
+      // If targetDealId is still an unmapped 'o_' reference, query live positions to find the exact dealId
+      if (targetDealId.startsWith('o_')) {
+        try {
+          const posRes = await fetch(`${this.getBaseUrl()}/positions`, {
+            headers: {
+              'X-CAP-API-KEY': apiKey,
+              CST: this.cstToken,
+              'X-SECURITY-TOKEN': this.xSecurityToken,
+            },
+          });
+          if (posRes.ok) {
+            const posData = await posRes.json();
+            const rawList = Array.isArray(posData.positions) ? posData.positions : Array.isArray(posData) ? posData : [];
+            for (const item of rawList) {
+              const p = item.position || item;
+              if (String(p.dealReference) === targetDealId && p.dealId) {
+                targetDealId = String(p.dealId);
+                this.dealRefToDealId.set(rawClean, targetDealId);
+                break;
+              }
             }
           }
         } catch {
@@ -1169,24 +1196,46 @@ export class CapitalComAdapter implements IBrokerAdapter {
           const errData = await res.json().catch(() => ({}));
           const errMsg = errData.errorCode || errData.message || `HTTP ${res.status}`;
 
-          // If position is already closed or deal not found on Capital.com, clean up cache cleanly
-          if (res.status === 404 || String(errMsg).includes('not.found') || String(errMsg).includes('already.closed')) {
-            this.lastKnownLivePositions.delete(targetDealId);
-            this.lastKnownLivePositions.delete(rawClean);
-            this.lastKnownLivePositions.delete(ticketId);
-            this.simulatedPositions = this.simulatedPositions.filter(
-              (p) => p.brokerTicketId !== targetDealId && p.brokerTicketId !== rawClean && p.brokerTicketId !== ticketId
-            );
-            this.lastPositionsFetchTimestamp = 0;
-            return {
-              success: true,
-              message: `Position #${rawClean} was already closed on Capital.com. Local cache synchronized.`,
-            };
+          // If position returned 404, verify with fresh GET /positions before deleting from cache.
+          // Never blindly report success if the trade is still alive on Capital.com!
+          if (res.status === 404) {
+            try {
+              const verifyRes = await fetch(`${this.getBaseUrl()}/positions`, {
+                headers: {
+                  'X-CAP-API-KEY': apiKey,
+                  CST: this.cstToken,
+                  'X-SECURITY-TOKEN': this.xSecurityToken,
+                },
+              });
+              if (verifyRes.ok) {
+                const verifyData = await verifyRes.json();
+                const rawList = Array.isArray(verifyData.positions) ? verifyData.positions : Array.isArray(verifyData) ? verifyData : [];
+                const stillExists = rawList.some((item: any) => {
+                  const p = item.position || item;
+                  return String(p.dealId) === targetDealId || String(p.dealId) === rawClean;
+                });
+                if (!stillExists) {
+                  this.lastKnownLivePositions.delete(targetDealId);
+                  this.lastKnownLivePositions.delete(rawClean);
+                  this.lastKnownLivePositions.delete(ticketId);
+                  this.simulatedPositions = this.simulatedPositions.filter(
+                    (p) => p.brokerTicketId !== targetDealId && p.brokerTicketId !== rawClean && p.brokerTicketId !== ticketId
+                  );
+                  this.lastPositionsFetchTimestamp = 0;
+                  return {
+                    success: true,
+                    message: `Position #${rawClean} is verified closed on Capital.com. Local cache synchronized.`,
+                  };
+                }
+              }
+            } catch {
+              // Fall through to error return
+            }
           }
 
           return {
             success: false,
-            message: `Capital.com rejected close for position #${targetDealId}: ${errMsg}.`,
+            message: `Capital.com rejected close for position #${targetDealId}: ${errMsg}. Position remains open on Capital.com.`,
           };
         }
       } catch (err: any) {
@@ -1220,17 +1269,9 @@ export class CapitalComAdapter implements IBrokerAdapter {
     const { apiKey, environment, hasValidCreds } = this.resolveCredentials();
     const sess = await this.ensureSession();
 
-    // Force fresh fetch of open positions
-    let positions = await this.getOpenPositions(true);
-
-    // If positions is empty but lastKnownLivePositions has entries, try those
-    if (positions.length === 0 && this.lastKnownLivePositions.size > 0) {
-      positions = Array.from(this.lastKnownLivePositions.values());
-    }
-
-    // If still empty and real broker credentials are active, query GET /positions directly as fallback
-    if (positions.length === 0 && hasValidCreds && sess.connected && apiKey && this.cstToken && this.xSecurityToken) {
+    if (hasValidCreds && sess.connected && apiKey && this.cstToken && this.xSecurityToken) {
       try {
+        // Direct authoritative query to Capital.com GET /positions to ensure all live positions are detected
         const res = await fetch(`${this.getBaseUrl()}/positions`, {
           headers: {
             'X-CAP-API-KEY': apiKey,
@@ -1238,38 +1279,54 @@ export class CapitalComAdapter implements IBrokerAdapter {
             'X-SECURITY-TOKEN': this.xSecurityToken,
           },
         });
+
         if (res.ok) {
           const data = await res.json();
           const list = Array.isArray(data.positions) ? data.positions : Array.isArray(data) ? data : [];
           for (const item of list) {
             const p = item.position || item;
-            const dId = String(p.dealId || p.dealReference || '');
-            if (dId) {
-              const closeRes = await this.closePosition(dId);
-              if (closeRes.success) closedCount++;
-              else errors.push(closeRes.message);
+            const dealId = String(p.dealId || '');
+            if (dealId) {
+              const closeRes = await this.closePosition(dealId);
+              if (closeRes.success) {
+                closedCount++;
+              } else {
+                errors.push(closeRes.message);
+              }
             }
           }
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          errors.push(`Failed to fetch positions from Capital.com: ${errData.errorCode || res.status}`);
         }
       } catch (err: any) {
-        errors.push(`Direct flatten fetch error: ${err.message}`);
+        errors.push(`Network error during Capital.com flatten: ${err.message}`);
       }
+
+      // Also attempt to close any remaining positions in lastKnownLivePositions
+      for (const [ticket, pos] of this.lastKnownLivePositions.entries()) {
+        const tId = pos.brokerTicketId || ticket;
+        const closeRes = await this.closePosition(tId);
+        if (closeRes.success) {
+          closedCount++;
+        }
+      }
+
+      // Re-synchronize with Capital.com to update live state
+      this.lastPositionsFetchTimestamp = 0;
+      await this.getOpenPositions(true);
+
+      return { closedCount, errors };
     }
 
-    // Close all gathered positions
-    for (const pos of positions) {
+    // Calibrated sandbox fallback
+    const toClose = [...this.simulatedPositions];
+    for (const pos of toClose) {
       const res = await this.closePosition(pos.brokerTicketId);
-      if (res.success) {
-        closedCount++;
-      } else {
-        errors.push(res.message);
-      }
+      if (res.success) closedCount++;
+      else errors.push(res.message);
     }
-
-    if (!hasValidCreds) {
-      this.simulatedPositions = [];
-    }
-
+    this.simulatedPositions = [];
     this.lastKnownLivePositions.clear();
     this.lastPositionsFetchTimestamp = 0;
 

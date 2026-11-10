@@ -148,7 +148,7 @@ export interface IBrokerAdapter {
   connect(config: BrokerConfig): Promise<{ success: boolean; latencyMs: number; message: string }>;
   disconnect(): Promise<void>;
   getAccountSummary(): Promise<BrokerAccountSummary>;
-  getOpenPositions(): Promise<BrokerPosition[]>;
+  getOpenPositions(forceFresh?: boolean): Promise<BrokerPosition[]>;
   getClosedPositions(): Promise<BrokerClosedPosition[]>;
   placeOrder(order: StandardizedOrderRequest): Promise<BrokerOrderResult>;
   modifyPosition?(
